@@ -17,7 +17,7 @@ public struct PicoHomelabModel: Hashable, Sendable {
     public let type: String
 
     /// Local domain name
-    public let domain: String
+    public let hostName: String
     
     /// IP address of Pico AI Homelab
     public let ipAddress: String
@@ -28,7 +28,28 @@ public struct PicoHomelabModel: Hashable, Sendable {
     public init(name: String, type: String, domain: String, ipAddress: String, port: Int) {
         self.name = name
         self.type = type
-        self.domain = domain
+        self.hostName = domain
+        self.ipAddress = ipAddress
+        self.port = port
+    }
+    
+    public init(result: NWBrowser.Result) throws {
+        guard
+            case .service(let name, let type, let domain, let interface) = result.endpoint,
+            case let NWBrowser.Result.Metadata.bonjour(txtRecord) = result.metadata else {
+            throw BonjourPicoError.invalidEndpoint
+        }
+        guard
+            let ipAddress = txtRecord["IPAddress"],
+            let localHostName = txtRecord["LocalHostName"],
+            let portString = txtRecord["Port"],
+            let port = Int(portString) else {
+            throw BonjourPicoError.noTxtRecord
+        }
+        
+        self.name = name
+        self.type = type
+        self.hostName = localHostName
         self.ipAddress = ipAddress
         self.port = port
     }

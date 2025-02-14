@@ -13,7 +13,7 @@ import Network
 open class BonjourPico: @unchecked Sendable {
 
     private var browserQ: NWBrowser? = nil
-    private var connectionQ: NWConnection? = nil
+//    private var connectionQ: NWConnection? = nil
     
     /// List of discovered Pico AI Homelab servers
     public private(set) var servers = [PicoHomelabModel]()
@@ -37,7 +37,7 @@ open class BonjourPico: @unchecked Sendable {
     }
     
     private func start() -> NWBrowser {
-        let descriptor = NWBrowser.Descriptor.bonjour(type: "_pico._tcp", domain: "local.")
+        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: "_pico._tcp", domain: "local.")
         let browser = NWBrowser(for: descriptor, using: .tcp)
         browser.stateUpdateHandler = { newState in
             self.state = newState
@@ -48,9 +48,10 @@ open class BonjourPico: @unchecked Sendable {
                 case .added(let result):
                     
                     print("+ \(result.endpoint)")
+                    
                     Task {
                         do {
-                            let server = try await self.createModel(result: result)
+                            let server = try PicoHomelabModel(result: result)
                             Task { @MainActor in
                                 self.servers.append(server)
                             }
@@ -75,7 +76,7 @@ open class BonjourPico: @unchecked Sendable {
                     Task {
                         do {
                             try await self.removeServer(result: old)
-                            let server = try await self.createModel(result: new)
+                            let server = try PicoHomelabModel(result: new)
                             Task { @MainActor in
                                 self.servers.append(server)
                             }
@@ -96,9 +97,6 @@ open class BonjourPico: @unchecked Sendable {
     }
     
     private func stop(browser: NWBrowser) {
-        self.connectionQ?.cancel()
-        self.connectionQ?.stateUpdateHandler = nil
-        self.connectionQ = nil
         self.state = nil
         browser.stateUpdateHandler = nil
         browser.cancel()
@@ -112,96 +110,6 @@ open class BonjourPico: @unchecked Sendable {
         Task { @MainActor in
             self.servers.removeAll { $0.name == name && $0.type == type  }
         }
-    }
-    
-    private func createModel(result: NWBrowser.Result) async throws -> PicoHomelabModel {
-        
-        guard case .service(let name, let type, let domain, let interface) = result.endpoint else {
-            throw BonjourPicoError.invalidEndpoint
-        }
-        
-        self.connectionQ = NWConnection(to: result.endpoint, using: .tcp)
-        
-        return try await withCheckedThrowingContinuation { continuation in
-                        
-            self.connectionQ?.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    // Connection is ready; retrieve the remote endpoint
-                    if let remoteEndpoint = self.connectionQ?.currentPath?.remoteEndpoint {
-                        self.connectionQ?.cancel()
-                        switch remoteEndpoint {
-                        case .hostPort(let host, let port):
-                            
-                            var ipAddress = ""
-                            switch host {
-                            case .ipv4(let address):
-                                ipAddress = address.debugDescription
-                            case .ipv6(let address):
-                                ipAddress = address.debugDescription
-                            case .name(let name, let interface):
-                                ipAddress = name
-                            }
-                            ipAddress = self.cleanIPAddress(ipAddress)
-                            
-                            // FIXME: for domain I would like to set the local DNS name of the
-                            // server, e.g. macbook.local
-                            let model = PicoHomelabModel(
-                                name: name,
-                                type: type,
-                                domain: self.resolveLocalHostName(ipAddress: ipAddress) ?? "",
-                                ipAddress: ipAddress,
-                                port: Int(port.rawValue)
-                            )
-                            continuation.resume(returning: model)
-                        default:
-                            continuation.resume(throwing: BonjourPicoError.invalidEndpoint)
-                        }
-                    }
-                default:
-                    break
-                }
-            }
-            self.connectionQ?.start(queue: .global())
-        }
-    }
-    
-    /// Resolves the local hostname for a given IP address
-    /// - Parameter ipAddress: The IP address to resolve (e.g. "192.168.1.100")
-    /// - Returns: The local hostname if found (e.g. "my-macbook.local"), nil otherwise
-    func resolveLocalHostName(ipAddress: String) -> String? {
-        var hints = addrinfo()
-        hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
-        hints.ai_flags = AI_NUMERICHOST
-        
-        var result: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(ipAddress, nil, &hints, &result) == 0,
-              let result = result else {
-            return nil
-        }
-        defer { freeaddrinfo(result) }
-        
-        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        if getnameinfo(result.pointee.ai_addr,
-                       result.pointee.ai_addrlen,
-                       &hostname,
-                       socklen_t(hostname.count),
-                       nil,
-                       0,
-                       NI_NAMEREQD) == 0 {
-            return String(cString: hostname)
-        }
-        
-        return nil
-    }
-    
-    /// Remove interface identifier
-    private func cleanIPAddress(_ ipAddress: String) -> String {
-        if let percentRange = ipAddress.range(of: "%") {
-            return String(ipAddress[..<percentRange.lowerBound])
-        }
-        return ipAddress
     }
 
     public init() {}

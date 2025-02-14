@@ -15,7 +15,7 @@ struct ContentView: View {
     var body: some View {
         VStack {
             List(bonjourPico.servers, id: \.self) { server in
-                let domain = "\(server.domain):\(server.port)"
+                let domain = "\(server.hostName):\(server.port)"
                 let ip = "\(server.ipAddress):\(server.port)"
                 Text("\(server.name): \(domain) \(ip)")
             }

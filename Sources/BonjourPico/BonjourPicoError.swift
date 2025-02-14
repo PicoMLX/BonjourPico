@@ -11,6 +11,8 @@ enum BonjourPicoError: Error {
     case internalError
     case invalidEndpoint
     case couldNotConnect
+    case connectionCancelled
+    case noTxtRecord
 }
 
 extension BonjourPicoError: LocalizedError {
@@ -22,6 +24,10 @@ extension BonjourPicoError: LocalizedError {
             return String(localized: "Invalid endpoint")
         case .couldNotConnect:
             return String(localized: "Could not connect to Pico AI Homelab server")
+        case .connectionCancelled:
+            return String(localized: "Connection cancelled")
+        case .noTxtRecord:
+            return String(localized: "Received incomplete Bonjour packet")
         }
     }
 }
