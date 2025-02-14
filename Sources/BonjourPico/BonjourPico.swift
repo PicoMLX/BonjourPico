@@ -133,7 +133,7 @@ open class BonjourPico: @unchecked Sendable {
                         switch remoteEndpoint {
                         case .hostPort(let host, let port):
                             
-                            let ipAddress: String
+                            var ipAddress = ""
                             switch host {
                             case .ipv4(let address):
                                 ipAddress = address.debugDescription
@@ -142,11 +142,14 @@ open class BonjourPico: @unchecked Sendable {
                             case .name(let name, let interface):
                                 ipAddress = name
                             }
+                            ipAddress = self.cleanIPAddress(ipAddress)
                             
+                            // FIXME: for domain I would like to set the local DNS name of the
+                            // server, e.g. macbook.local
                             let model = PicoHomelabModel(
                                 name: name,
                                 type: type,
-                                domain: result.endpoint.debugDescription,
+                                domain: self.resolveLocalHostName(ipAddress: ipAddress) ?? "",
                                 ipAddress: ipAddress,
                                 port: Int(port.rawValue)
                             )
@@ -163,7 +166,46 @@ open class BonjourPico: @unchecked Sendable {
         }
     }
     
+    /// Resolves the local hostname for a given IP address
+    /// - Parameter ipAddress: The IP address to resolve (e.g. "192.168.1.100")
+    /// - Returns: The local hostname if found (e.g. "my-macbook.local"), nil otherwise
+    func resolveLocalHostName(ipAddress: String) -> String? {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_flags = AI_NUMERICHOST
+        
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(ipAddress, nil, &hints, &result) == 0,
+              let result = result else {
+            return nil
+        }
+        defer { freeaddrinfo(result) }
+        
+        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        if getnameinfo(result.pointee.ai_addr,
+                       result.pointee.ai_addrlen,
+                       &hostname,
+                       socklen_t(hostname.count),
+                       nil,
+                       0,
+                       NI_NAMEREQD) == 0 {
+            return String(cString: hostname)
+        }
+        
+        return nil
+    }
+    
+    /// Remove interface identifier
+    private func cleanIPAddress(_ ipAddress: String) -> String {
+        if let percentRange = ipAddress.range(of: "%") {
+            return String(ipAddress[..<percentRange.lowerBound])
+        }
+        return ipAddress
+    }
+
     public init() {}
+    
     deinit {
         if let browserQ {
             stop(browser: browserQ)
