@@ -1,0 +1,15 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Could not connect to Pico AI Homelab server" : {
+
+    },
+    "Internal error" : {
+
+    },
+    "Invalid endpoint" : {
+
+    }
+  },
+  "version" : "1.0"
+}
