@@ -57,8 +57,8 @@ Pico AI Homelab broadcasts a Bonjour service with the following characteristics:
   - `LocalHostName`: The local hostname (e.g., ronalds-macbook.local)  
   - `ServerIdentifier`: A unique UUID string that uniquely identifies a Pico AI Homelab instance, even if its IP address, service name, or local hostname changes.
 
-[!NOTE]  
-Each Pico AI Homelab instance sends a unique UUID as its server identifier, which remains consistent between sessions. Even if the admin changes the computer’s hostname or IP address, this identifier ensures that the correct instance is recognized when scanning the network again.
+> [!NOTE]  
+> Each Pico AI Homelab instance sends a unique UUID as its server identifier, which remains consistent between sessions. Even if the admin changes the computer’s hostname or IP address, this identifier ensures that the correct instance is recognized when scanning the network again.
 
 ------------------------------------------------------------
 
