@@ -8,8 +8,8 @@ Pico AI Homelab broadcasts its hostname, IP address, and port using Bonjour by d
 
 Bonjour Pico is a Swift package—and includes an example app—that simplifies the process for chat app developers to set up automatic detection and connection to Pico AI Homelab servers.
 
-[!NOTE]  
-Bonjour support is available in Pico AI Homelab version 1.1.1 (build 29) and newer.
+> [!NOTE]  
+> Bonjour support is available in Pico AI Homelab version 1.1.1 (build 29) and newer.
 
 ------------------------------------------------------------
 
@@ -34,14 +34,14 @@ From a user’s perspective, integrating Bonjour minimizes the need for manual e
 4. The user selects one or more servers to connect to.  
 5. The app stores the server name, port, IP address, and/or hostname and automatically connects to the selected server.
 
-[!WARNING]  
-Keep in mind that Pico AI Homelab administrators can disable Bonjour in the settings. Therefore, chat apps should not rely solely on Bonjour. Always provide an alternative method for users to manually enter the port, hostname, or IP address of the Pico AI Homelab server.
+> [!WARNING]  
+> Keep in mind that Pico AI Homelab administrators can disable Bonjour in the settings. Therefore, chat apps should not rely solely on Bonjour. Always provide an alternative method for users to manually enter the port, hostname, or IP address of the Pico AI Homelab server.
 
-[!NOTE]  
-Multiple Pico AI Homelab servers may be present on a local network. Ensure that your UI displays a list of all discovered servers.
+> [!NOTE]  
+> Multiple Pico AI Homelab servers may be present on a local network. Ensure that your UI displays a list of all discovered servers.
 
-[!NOTE]  
-Because IP addresses on a local network can change over time, it is recommended to use the local hostname for connection rather than the IP address, despite the latter being included in the broadcast.
+> [!NOTE]  
+> Because IP addresses on a local network can change over time, it is recommended to use the local hostname for connection rather than the IP address, despite the latter being included in the broadcast.
 
 ------------------------------------------------------------
 
