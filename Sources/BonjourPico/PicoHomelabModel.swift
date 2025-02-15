@@ -8,7 +8,11 @@
 import Foundation
 import Network
 
-public struct PicoHomelabModel: Hashable, Sendable {
+public struct PicoHomelabModel: Hashable, Sendable, Identifiable {
+    
+    /// Persistent identifier of the server
+    /// Use this identifier to recognize servers even their name, hostname or ip address changes
+    public let id: String
     
     /// Human readable name, e.g. `Ronald's Homelab`
     public let name: String
@@ -25,7 +29,8 @@ public struct PicoHomelabModel: Hashable, Sendable {
     /// Port used by Pico AI Homelab
     public let port: Int
     
-    public init(name: String, type: String, domain: String, ipAddress: String, port: Int) {
+    public init(serverId: String, name: String, type: String, domain: String, ipAddress: String, port: Int) {
+        self.id = serverId
         self.name = name
         self.type = type
         self.hostName = domain
@@ -40,13 +45,14 @@ public struct PicoHomelabModel: Hashable, Sendable {
             throw BonjourPicoError.invalidEndpoint
         }
         guard
+            let id = txtRecord["ServerIdentifier"],
             let ipAddress = txtRecord["IPAddress"],
             let localHostName = txtRecord["LocalHostName"],
             let portString = txtRecord["Port"],
             let port = Int(portString) else {
             throw BonjourPicoError.noTxtRecord
         }
-        
+        self.id = id
         self.name = name
         self.type = type
         self.hostName = localHostName
