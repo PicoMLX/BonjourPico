@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.2
 
 import PackageDescription
 
@@ -9,14 +9,32 @@ let package = Package(
         .macOS(.v14),
         .iOS(.v17),
         .tvOS(.v17),
-        .visionOS(.v1),
+        .visionOS(.v1)
     ],
     products: [
         .library(
             name: "BonjourPico",
-            targets: ["BonjourPico"]),
+            targets: ["BonjourPico"])
     ],
     targets: [
-        .target(name: "BonjourPico"),
+        .target(
+            name: "BonjourDiscoveryCore",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+                .unsafeFlags(["-warn-concurrency"])
+            ]
+        ),
+        .target(
+            name: "BonjourPico",
+            dependencies: ["BonjourDiscoveryCore"],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+                .unsafeFlags(["-warn-concurrency"])
+            ]
+        ),
+        .testTarget(
+            name: "BonjourPicoTests",
+            dependencies: ["BonjourDiscoveryCore", "BonjourPico"]
+        )
     ]
 )

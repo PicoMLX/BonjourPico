@@ -1,109 +1,118 @@
 # Discover Pico AI Homelab Servers Using Bonjour
 
-[Pico AI Homelab](https://apps.apple.com/us/app/pico-ai-homelab-powered-by-mlx/id6738607769?mt=12) is the fastest and easiest way to set up a local LLM server on your Apple Silicon Mac, and it's free on the Mac App Store. For chat app developers, try adding BonjourPico to your project—it lets users easily connect to any Pico AI Homelab server on their local network without any hassle.
+[Pico AI Homelab](https://apps.apple.com/us/app/pico-ai-homelab-powered-by-mlx/id6738607769?mt=12) is the fastest way to stand up a local LLM server on Apple Silicon. The BonjourPico Swift package lets your app discover those servers automatically using Bonjour with a modern Swift 6.2 architecture.
 
-## Overview 
+## Overview
 
-Pico AI Homelab broadcasts its hostname, IP address, and port using Bonjour by default. Chat applications can listen for these broadcasts to automatically connect to Pico AI Homelab.
+BonjourPico now ships with two layers:
 
-Bonjour Pico is a Swift package—and includes an example app—that simplifies the process for chat app developers to set up automatic detection and connection to Pico AI Homelab servers.
+- `BonjourDiscoveryCore` — an actor-based wrapper around `NWBrowser` that surfaces async streams of endpoints, TXT metadata decoding, and automatic retry logic under strict concurrency.
+- `BonjourPico` — a `@MainActor` façade and `BonjourPicoViewModel` powered by the Observation framework for SwiftUI apps.
 
-> [!NOTE]  
+The example project demonstrates both layers and mirrors the code snippets below.
+
+> [!NOTE]
 > Bonjour support is available in Pico AI Homelab version 1.1.1 (build 29) and newer.
 
-------------------------------------------------------------
+## Architecture Highlights
 
-## Using Bonjour to Discover Pico AI Homelab Servers
+- Swift 6.2 tools with strict concurrency warnings enabled by default.
+- Actor-isolated discovery pipeline that deduplicates endpoints and streams browser state updates.
+- SwiftUI-friendly view model exposing observable `endpoints`, `state`, `isScanning`, and `error` properties.
+- Resilient TXT decoder that understands `NWTXTRecord.Entry` enum cases and preserves raw data when needed.
 
-Enhance your chat app’s user experience by providing an option to automatically detect Pico AI Homelab servers on the local network via Bonjour. Pico AI Homelab broadcasts the following details:
+## Platform & Project Requirements
 
-• A human-readable instance name (e.g., “Ronald's AI Homelab”)  
-• The server’s local hostname (e.g., macbook-pro.local)  
-• The server’s IP address  
-• The port on which Pico AI Homelab is running (e.g., 11434)
+- Minimum deployment targets: macOS 14, iOS 17, tvOS 17, visionOS 1.
+- Add the following keys to your app bundle:
+  - `NSBonjourServices`: include `_pico._tcp`.
+  - `NSLocalNetworkUsageDescription`: explain why Bonjour discovery is required.
+- For sandboxed macOS builds, enable **Outgoing Connections (Client)** under Signing & Capabilities → App Sandbox.
 
-------------------------------------------------------------
+## Installation (Swift Package Manager)
 
-## User Walkthrough
+1. In Xcode, choose **File → Add Packages…**.
+2. Enter `https://github.com/PicoMLX/BonjourPico` and select the `feature/Swift6` branch (or latest release).
+3. Add the `BonjourPico` product to your target. The dependency automatically includes `BonjourDiscoveryCore` with strict concurrency flags.
 
-From a user’s perspective, integrating Bonjour minimizes the need for manual entry of IP addresses or hostnames. Here is how the process works:
+## Quick Start: Async API
 
-1. In settings or during setup, the user taps the “Scan for Pico AI Homelab” button.  
-2. The chat app listens for Bonjour packets broadcasted by all Pico AI Homelab instances on the local network.  
-3. A list of available Pico AI Homelab instances is displayed (each identified by its human-readable name).  
-4. The user selects one or more servers to connect to.  
-5. The app stores the server name, port, IP address, and/or hostname and automatically connects to the selected server.
+```swift
+import BonjourPico
 
-> [!WARNING]  
-> Keep in mind that Pico AI Homelab administrators can disable Bonjour in the settings. Therefore, chat apps should not rely solely on Bonjour. Always provide an alternative method for users to manually enter the port, hostname, or IP address of the Pico AI Homelab server.
+func discover() async {
+    let pico = BonjourPico()
+    do {
+        try await pico.startScanning()
+        for try await endpoints in await pico.streamEndpoints() {
+            for endpoint in endpoints {
+                print("Found", endpoint.displayName, endpoint.port)
+            }
+        }
+    } catch {
+        print("Bonjour scan failed:", error)
+    }
+}
 
-> [!NOTE]  
-> Multiple Pico AI Homelab servers may be present on a local network. Ensure that your UI displays a list of all discovered servers.
+Task { await discover() }
+```
 
-> [!NOTE]  
-> Because IP addresses on a local network can change over time, it is recommended to use the local hostname for connection rather than the IP address, despite the latter being included in the broadcast.
-
-------------------------------------------------------------
-
-## Bonjour Broadcast Details
-
-Pico AI Homelab broadcasts a Bonjour service with the following characteristics:
-
-- Service Type: _pico._tcp  
-- Human-readable Service Name (e.g., “Ronald's AI Homelab”)  
-- TXT Record Dictionary containing:
-  - `IPAddress`: The IP address of the Pico AI Homelab server  
-  - `Port`: The port number (as a string) to which the Pico AI Homelab HTTP server is bound (default is 11434)  
-  - `LocalHostName`: The local hostname (e.g., ronalds-macbook.local)  
-  - `ServerIdentifier`: A unique UUID string that uniquely identifies a Pico AI Homelab instance, even if its IP address, service name, or local hostname changes.
-
-> [!NOTE]  
-> Each Pico AI Homelab instance sends a unique UUID as its server identifier, which remains consistent between sessions. Even if the admin changes the computer’s hostname or IP address, this identifier ensures that the correct instance is recognized when scanning the network again.
-
-------------------------------------------------------------
-
-## Installation
-
-The easiest way to use Bonjour for Pico AI Homelab in your chat app is by adding the BonjourPico Swift package. You can find it here:  
-https://github.com/PicoMLX/BonjourPico
-
-------------------------------------------------------------
-
-## Xcode Settings
-
-Before running your app, update your Xcode project settings as follows:
-
-1. Add an NSBonjourServices property to your Info.plist and include _pico._tcp as one of the items.  
-2. Add an NSLocalNetworkUsageDescription property to your Info.plist to explain why your app requires network access.  
-3. If your app is sandboxed, enable "Outgoing Connections (Client)" in Signing & Capabilities > App Sandbox.
-
-------------------------------------------------------------
-
-## Sample Client Code
-
-An example app for both iOS and macOS is included in the repository.
+## SwiftUI Integration
 
 ```swift
 import SwiftUI
 import BonjourPico
 
 struct ContentView: View {
-    
-    @State var bonjourPico = BonjourPico()
-    
+    @State private var viewModel = BonjourPicoViewModel()
+
     var body: some View {
-        VStack {
-            List(bonjourPico.servers, id: \.self) { server in
-                let domain = "\(server.hostName):\(server.port)"
-                let ip = "\(server.ipAddress):\(server.port)"
-                Text("\(server.name): \(domain) \(ip)")
+        NavigationStack {
+            Group {
+                if viewModel.endpoints.isEmpty {
+                    ContentUnavailableView("No Pico servers", systemImage: "bonjour")
+                } else {
+                    List(viewModel.endpoints) { endpoint in
+                        VStack(alignment: .leading) {
+                            Text(endpoint.displayName)
+                            if let host = endpoint.hostName {
+                                Text("Host: \(host)").font(.footnote)
+                            }
+                        }
+                    }
+                }
             }
-            
-            Button(bonjourPico.isScanning ? "Stop scanning" : "Scan for Pico AI Homelab servers") {
-                bonjourPico.startStop()
+            .navigationTitle("Discover")
+            .toolbar {
+                Button(viewModel.isScanning ? "Stop" : "Scan") {
+                    viewModel.isScanning ? viewModel.stopScanning() : viewModel.startScanning()
+                }
             }
+            .task { viewModel.startScanning() }
         }
-        .padding()
+        .alert("Bonjour Error", isPresented: .constant(viewModel.error != nil)) {
+            Button("OK") { viewModel.error = nil }
+        } message: {
+            Text(viewModel.error?.localizedDescription ?? "")
+        }
     }
 }
 ```
+
+## API Snapshot
+
+- `BonjourEndpoint`: Sendable model containing ID, display name, service type, hostname, IP addresses, port, and raw TXT record.
+- `BonjourDiscoveryActor.Configuration`: Configure service type, domain, retry delays, and logging.
+- `BonjourPico`: `@MainActor` wrapper exposing async `startScanning()`, `stopScanning()`, `endpoints`, and streaming helpers.
+- `BonjourPicoViewModel`: Observable SwiftUI-ready façade managing scanning lifecycle and error propagation.
+- `BonjourPicoError`: Public error enum that maps discovery failures, cancellation, and underlying errors into localized descriptions.
+
+## Tips & Troubleshooting
+
+- Administrators can disable Bonjour in Pico AI Homelab. Always provide a manual hostname/IP fallback.
+- Multiple servers may appear; present the full list so users can choose their target.
+- Prefer `endpoint.hostName` over raw IP addresses because DHCP can change addresses between sessions.
+- Each server broadcasts a stable `ServerIdentifier` UUID so you can persist choices across restarts.
+
+> [!TIP]
+> The included `BonjourPicoExample` target shows how to incorporate the view model into a real SwiftUI app.

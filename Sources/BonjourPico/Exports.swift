@@ -1,0 +1,4 @@
+import BonjourDiscoveryCore
+
+public typealias BonjourEndpoint = BonjourDiscoveryCore.BonjourEndpoint
+public typealias BonjourDiscoveryConfiguration = BonjourDiscoveryActor.Configuration
