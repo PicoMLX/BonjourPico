@@ -47,7 +47,7 @@ open class BonjourPico: @unchecked Sendable {
     }
 
     private static func magicPacket(for macString: String) throws -> Data {
-        let bytes = macString.split(separator: ":").compactMap { UInt8($0, radix: 16) }
+        let bytes = macString.replacingOccurrences(of: "-", with: ":").split(separator: ":").compactMap { UInt8($0, radix: 16) }
         guard bytes.count == 6 else { throw BonjourPicoError.invalidMACAddress }
         var packet = Data(repeating: 0xFF, count: 6)
         for _ in 0..<16 { packet.append(contentsOf: bytes) }
@@ -57,22 +57,29 @@ open class BonjourPico: @unchecked Sendable {
     private static func sendMagicPacket(_ data: Data) async throws {
         let endpoint = NWEndpoint.hostPort(host: "255.255.255.255", port: 9)
         let connection = NWConnection(to: endpoint, using: .udp)
+        let queue = DispatchQueue(label: "BonjourPico.WOL")
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var isDone = false
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
                     connection.send(content: data, completion: .contentProcessed { error in
+                        guard !isDone else { return }
+                        isDone = true
                         connection.cancel()
                         if let error { continuation.resume(throwing: error) }
                         else { continuation.resume() }
                     })
-                case .failed(let error):
+                case .failed(let error), .waiting(let error):
+                    guard !isDone else { return }
+                    isDone = true
+                    connection.cancel()
                     continuation.resume(throwing: error)
                 default:
                     break
                 }
             }
-            connection.start(queue: .global())
+            connection.start(queue: queue)
         }
     }
     
