@@ -35,6 +35,46 @@ open class BonjourPico: @unchecked Sendable {
             self.browserQ = self.start()
         }
     }
+
+    /// Sends a Wake-on-LAN magic packet to the given peer.
+    /// The peer must have a non-nil `macAddress` (advertised via the `MACAddress` TXT record key).
+    /// Because the peer is likely offline when this is called, callers must cache the peer's
+    /// `macAddress` (keyed by `peer.id`) before the peer disappears from `servers`.
+    public func wake(peer: PicoHomelabModel) async throws {
+        guard let mac = peer.macAddress else { throw BonjourPicoError.noMACAddress }
+        let packet = try Self.magicPacket(for: mac)
+        try await Self.sendMagicPacket(packet)
+    }
+
+    private static func magicPacket(for macString: String) throws -> Data {
+        let bytes = macString.split(separator: ":").compactMap { UInt8($0, radix: 16) }
+        guard bytes.count == 6 else { throw BonjourPicoError.invalidMACAddress }
+        var packet = Data(repeating: 0xFF, count: 6)
+        for _ in 0..<16 { packet.append(contentsOf: bytes) }
+        return packet
+    }
+
+    private static func sendMagicPacket(_ data: Data) async throws {
+        let endpoint = NWEndpoint.hostPort(host: "255.255.255.255", port: 9)
+        let connection = NWConnection(to: endpoint, using: .udp)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    connection.send(content: data, completion: .contentProcessed { error in
+                        connection.cancel()
+                        if let error { continuation.resume(throwing: error) }
+                        else { continuation.resume() }
+                    })
+                case .failed(let error):
+                    continuation.resume(throwing: error)
+                default:
+                    break
+                }
+            }
+            connection.start(queue: .global())
+        }
+    }
     
     private func start() -> NWBrowser {
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: "_pico._tcp", domain: "local.")

@@ -56,6 +56,7 @@ Pico AI Homelab broadcasts a Bonjour service with the following characteristics:
   - `Port`: The port number (as a string) to which the Pico AI Homelab HTTP server is bound (default is 11434)  
   - `LocalHostName`: The local hostname (e.g., ronalds-macbook.local)  
   - `ServerIdentifier`: A unique UUID string that uniquely identifies a Pico AI Homelab instance, even if its IP address, service name, or local hostname changes.
+  - `MACAddress` *(optional)*: The MAC address of the server's network interface, included when Wake-on-LAN is enabled in Pico AI Homelab settings.
 
 > [!NOTE]  
 > Each Pico AI Homelab instance sends a unique UUID as its server identifier, which remains consistent between sessions. Even if the admin changes the computer’s hostname or IP address, this identifier ensures that the correct instance is recognized when scanning the network again.
@@ -107,3 +108,40 @@ struct ContentView: View {
     }
 }
 ```
+
+------------------------------------------------------------
+
+## Wake-on-LAN
+
+BonjourPico can send a Wake-on-LAN magic packet to wake a sleeping Pico AI Homelab server. This requires Pico AI Homelab to have Wake-on-LAN enabled so it advertises its `MACAddress` in the Bonjour TXT record.
+
+```swift
+try await bonjourPico.wake(peer: server)
+```
+
+> [!IMPORTANT]
+> When a machine goes to sleep, its Bonjour advertisement stops and BonjourPico removes it from `servers`. You must **cache the `macAddress` before the peer disappears**, using the stable `id` (ServerIdentifier) as the key.
+
+```swift
+// When a server is discovered, persist its MAC address:
+if let mac = server.macAddress {
+    UserDefaults.standard.set(mac, forKey: "mac-\(server.id)")
+}
+
+// Later, to wake a known-but-offline server:
+if let mac = UserDefaults.standard.string(forKey: "mac-\(knownServer.id)") {
+    let peerWithMac = PicoHomelabModel(
+        serverId: knownServer.id,
+        name: knownServer.name,
+        type: knownServer.type,
+        domain: knownServer.hostName,
+        ipAddress: knownServer.ipAddress,
+        port: knownServer.port,
+        macAddress: mac
+    )
+    try await bonjourPico.wake(peer: peerWithMac)
+}
+```
+
+> [!NOTE]
+> The magic packet is sent as a UDP broadcast (`255.255.255.255:9`) directly from the chat app. Both the chat app and the target machine must be on the same LAN subnet. WoL magic packets do not cross routers.
