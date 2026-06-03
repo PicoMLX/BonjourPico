@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Darwin
 
 /**
  Make sure to add these settings to your project. If you skip these, your app won't be able to scan for Pico AI Homelab.
@@ -34,6 +35,57 @@ open class BonjourPico: @unchecked Sendable {
         } else {
             self.browserQ = self.start()
         }
+    }
+
+    /// Sends a Wake-on-LAN magic packet to the given peer.
+    /// The peer must have a non-nil `macAddress` (advertised via the `MACAddress` TXT record key).
+    /// Because the peer is likely offline when this is called, callers must cache the peer's
+    /// `macAddress` (keyed by `peer.id`) before the peer disappears from `servers`.
+    public func wake(peer: PicoHomelabModel) async throws {
+        guard let mac = peer.macAddress else { throw BonjourPicoError.noMACAddress }
+        let packet = try Self.magicPacket(for: mac)
+        try Self.sendMagicPacket(packet)
+    }
+
+    private static func magicPacket(for macString: String) throws -> Data {
+        let components = macString.replacingOccurrences(of: "-", with: ":").split(separator: ":")
+        guard components.count == 6 else { throw BonjourPicoError.invalidMACAddress }
+        let bytes: [UInt8] = try components.map { component in
+            guard component.count == 2, let byte = UInt8(component, radix: 16) else {
+                throw BonjourPicoError.invalidMACAddress
+            }
+            return byte
+        }
+        var packet = Data(repeating: 0xFF, count: 6)
+        for _ in 0..<16 { packet.append(contentsOf: bytes) }
+        return packet
+    }
+
+    // NWConnection does not support UDP broadcast (Apple TN3151). Use BSD sockets with
+    // SO_BROADCAST so the magic packet reaches 255.255.255.255 on all Apple platforms.
+    private static func sendMagicPacket(_ data: Data) throws {
+        let sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard sock >= 0 else { throw BonjourPicoError.internalError }
+        defer { Darwin.close(sock) }
+
+        var broadcast: Int32 = 1
+        guard setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            throw BonjourPicoError.internalError
+        }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = UInt16(9).bigEndian
+        addr.sin_addr.s_addr = INADDR_BROADCAST
+
+        let sent = data.withUnsafeBytes { buf in
+            withUnsafeMutablePointer(to: &addr) { addrPtr in
+                addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                    sendto(sock, buf.baseAddress, data.count, 0, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+        }
+        guard sent == data.count else { throw BonjourPicoError.internalError }
     }
     
     private func start() -> NWBrowser {

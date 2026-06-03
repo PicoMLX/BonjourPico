@@ -13,6 +13,8 @@ enum BonjourPicoError: Error {
     case couldNotConnect
     case connectionCancelled
     case noTxtRecord
+    case noMACAddress
+    case invalidMACAddress
 }
 
 extension BonjourPicoError: LocalizedError {
@@ -28,6 +30,10 @@ extension BonjourPicoError: LocalizedError {
             return String(localized: "Connection cancelled")
         case .noTxtRecord:
             return String(localized: "Received incomplete Bonjour packet")
+        case .noMACAddress:
+            return String(localized: "No MAC address available for Wake-on-LAN")
+        case .invalidMACAddress:
+            return String(localized: "Invalid MAC address format")
         }
     }
 }

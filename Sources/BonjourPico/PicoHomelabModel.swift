@@ -28,16 +28,20 @@ public struct PicoHomelabModel: Hashable, Sendable, Identifiable {
 
     /// Port used by Pico AI Homelab
     public let port: Int
-    
-    public init(serverId: String, name: String, type: String, domain: String, ipAddress: String, port: Int) {
+
+    /// MAC address of the Pico AI Homelab server, used for Wake-on-LAN. Nil if not advertised.
+    public let macAddress: String?
+
+    public init(serverId: String, name: String, type: String, domain: String, ipAddress: String, port: Int, macAddress: String? = nil) {
         self.id = serverId
         self.name = name
         self.type = type
         self.hostName = domain
         self.ipAddress = ipAddress
         self.port = port
+        self.macAddress = macAddress
     }
-    
+
     public init(result: NWBrowser.Result) throws {
         guard
             case .service(let name, let type, let domain, let interface) = result.endpoint,
@@ -58,6 +62,7 @@ public struct PicoHomelabModel: Hashable, Sendable, Identifiable {
         self.hostName = localHostName
         self.ipAddress = ipAddress
         self.port = port
+        self.macAddress = txtRecord["MACAddress"]
     }
 }
 
