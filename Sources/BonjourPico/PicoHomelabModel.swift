@@ -44,7 +44,7 @@ public struct PicoHomelabModel: Hashable, Sendable, Identifiable {
 
     public init(result: NWBrowser.Result) throws {
         guard
-            case .service(let name, let type, let domain, let interface) = result.endpoint,
+            case .service(let name, let type, _, _) = result.endpoint,
             case let NWBrowser.Result.Metadata.bonjour(txtRecord) = result.metadata else {
             throw BonjourPicoError.invalidEndpoint
         }
@@ -65,5 +65,3 @@ public struct PicoHomelabModel: Hashable, Sendable, Identifiable {
         self.macAddress = txtRecord["MACAddress"]
     }
 }
-
-extension PicoHomelabModel: Equatable {}

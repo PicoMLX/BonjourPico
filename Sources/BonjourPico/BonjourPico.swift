@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Darwin
+import os
 
 /**
  Make sure to add these settings to your project. If you skip these, your app won't be able to scan for Pico AI Homelab.
@@ -9,25 +10,28 @@ import Darwin
  - For sandboxed macOS app, enable`Signing & Capabilities` -> `App Sandbox` -> `Network:` `Outgoing Connections (Client)`
 
  This code is based on this example: https://developer.apple.com/forums/thread/735862
+
+ - Note: `BonjourPico` is main-actor isolated. Create it and call its methods from the main actor.
  */
+@MainActor
 @Observable
-open class BonjourPico: @unchecked Sendable {
+open class BonjourPico {
 
     private var browserQ: NWBrowser? = nil
-//    private var connectionQ: NWConnection? = nil
-    
+
+    private let logger = Logger(subsystem: "BonjourPico", category: "discovery")
+
     /// List of discovered Pico AI Homelab servers
     public private(set) var servers = [PicoHomelabModel]()
-    
+
     /// State of the browser. Is nil if browser isn't running
     public private(set) var state: NWBrowser.State? = nil
-    
+
     /// True if BonjourPico is scanning for Pico AI Homelab servers
     public var isScanning: Bool {
-        guard let browserQ else { return false }
-        return browserQ.state == .ready
+        state == .ready
     }
-    
+
     public func startStop() {
         if let browser = self.browserQ {
             self.browserQ = nil
@@ -44,14 +48,18 @@ open class BonjourPico: @unchecked Sendable {
     public func wake(peer: PicoHomelabModel) async throws {
         guard let mac = peer.macAddress else { throw BonjourPicoError.noMACAddress }
         let packet = try Self.magicPacket(for: mac)
-        try Self.sendMagicPacket(packet)
+        // sendMagicPacket performs a blocking BSD socket send. Run it off the
+        // calling (main) actor so the async contract is honest.
+        try await Task.detached { try Self.sendMagicPacket(packet) }.value
     }
 
-    private static func magicPacket(for macString: String) throws -> Data {
+    private nonisolated static func magicPacket(for macString: String) throws -> Data {
         let components = macString.replacingOccurrences(of: "-", with: ":").split(separator: ":")
         guard components.count == 6 else { throw BonjourPicoError.invalidMACAddress }
         let bytes: [UInt8] = try components.map { component in
-            guard component.count == 2, let byte = UInt8(component, radix: 16) else {
+            guard component.count == 2,
+                  component.allSatisfy(\.isHexDigit),
+                  let byte = UInt8(component, radix: 16) else {
                 throw BonjourPicoError.invalidMACAddress
             }
             return byte
@@ -63,14 +71,14 @@ open class BonjourPico: @unchecked Sendable {
 
     // NWConnection does not support UDP broadcast (Apple TN3151). Use BSD sockets with
     // SO_BROADCAST so the magic packet reaches 255.255.255.255 on all Apple platforms.
-    private static func sendMagicPacket(_ data: Data) throws {
+    private nonisolated static func sendMagicPacket(_ data: Data) throws {
         let sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard sock >= 0 else { throw BonjourPicoError.internalError }
+        guard sock >= 0 else { throw socketError() }
         defer { Darwin.close(sock) }
 
         var broadcast: Int32 = 1
         guard setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-            throw BonjourPicoError.internalError
+            throw socketError()
         }
 
         var addr = sockaddr_in()
@@ -85,90 +93,85 @@ open class BonjourPico: @unchecked Sendable {
                 }
             }
         }
-        guard sent == data.count else { throw BonjourPicoError.internalError }
+        guard sent == data.count else { throw socketError() }
+    }
+
+    /// Maps the current `errno` to a descriptive error. Must be called immediately
+    /// after the failing syscall, before any other call can overwrite `errno`.
+    private nonisolated static func socketError() -> BonjourPicoError {
+        let err = errno
+        if err == EPERM {
+            return .broadcastNotPermitted
+        }
+        return .sendFailed(String(cString: strerror(err)))
     }
     
     private func start() -> NWBrowser {
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: "_pico._tcp", domain: "local.")
         let browser = NWBrowser(for: descriptor, using: .tcp)
-        browser.stateUpdateHandler = { newState in
-            self.state = newState
+        // NWBrowser delivers callbacks on the queue passed to `start(queue:)`. We use
+        // `.main`, so it is safe to assume main-actor isolation inside these handlers.
+        browser.stateUpdateHandler = { [weak self] newState in
+            MainActor.assumeIsolated {
+                self?.state = newState
+            }
         }
-        browser.browseResultsChangedHandler = { updated, changes in
-            for change in changes {
-                switch change {
-                case .added(let result):
-                    
-                    print("+ \(result.endpoint)")
-                    
-                    Task {
-                        do {
-                            let server = try PicoHomelabModel(result: result)
-                            Task { @MainActor in
-                                self.servers.append(server)
-                            }
-                        } catch {
-                            print(error)
-                        }
+        browser.browseResultsChangedHandler = { [weak self] _, changes in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for change in changes {
+                    switch change {
+                    case .added(let result):
+                        self.addServer(result: result)
+                    case .removed(let result):
+                        self.removeServer(result: result)
+                    case .changed(old: _, new: let new, flags: _):
+                        self.removeServer(result: new)
+                        self.addServer(result: new)
+                    case .identical:
+                        break
+                    @unknown default:
+                        break
                     }
-                    
-                case .removed(let result):
-                    
-                    print("- \(result.endpoint)")
-                    Task {
-                        do {
-                            try await self.removeServer(result: result)
-                        } catch {
-                            print(error)
-                        }
-                    }
-                    
-                case .changed(old: let old, new: let new, flags: _):
-                    
-                    Task {
-                        do {
-                            try await self.removeServer(result: old)
-                            let server = try PicoHomelabModel(result: new)
-                            Task { @MainActor in
-                                self.servers.append(server)
-                            }
-                        } catch {
-                            print(error)
-                        }
-                    }
-                    
-                case .identical:
-                    fallthrough
-                @unknown default:
-                    print("?")
                 }
             }
         }
         browser.start(queue: .main)
         return browser
     }
-    
+
     private func stop(browser: NWBrowser) {
         self.state = nil
         browser.stateUpdateHandler = nil
         browser.cancel()
     }
-    
-    @MainActor
-    private func removeServer(result: NWBrowser.Result) throws {
-        guard case .service(let name, let type, let domain, let interface) = result.endpoint else {
-            throw BonjourPicoError.invalidEndpoint
-        }
-        Task { @MainActor in
-            self.servers.removeAll { $0.name == name && $0.type == type  }
+
+    private func addServer(result: NWBrowser.Result) {
+        do {
+            let server = try PicoHomelabModel(result: result)
+            // Replace any existing entry with the same stable identifier to avoid duplicates.
+            servers.removeAll { $0.id == server.id }
+            servers.append(server)
+            logger.debug("Discovered server \(server.name, privacy: .public)")
+        } catch {
+            logger.error("Failed to add server: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    public init() {}
-    
-    deinit {
-        if let browserQ {
-            stop(browser: browserQ)
+    private func removeServer(result: NWBrowser.Result) {
+        // Prefer the stable ServerIdentifier; fall back to name + type when unavailable.
+        if case let .bonjour(txtRecord) = result.metadata,
+           let id = txtRecord["ServerIdentifier"] {
+            servers.removeAll { $0.id == id }
+            return
         }
+        guard case .service(let name, let type, _, _) = result.endpoint else { return }
+        servers.removeAll { $0.name == name && $0.type == type }
+    }
+
+    public init() {}
+
+    deinit {
+        browserQ?.cancel()
     }
 }

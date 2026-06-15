@@ -148,3 +148,5 @@ if let mac = UserDefaults.standard.string(forKey: "mac-\(knownServer.id)") {
 
 > [!WARNING]
 > **iOS apps require the `com.apple.developer.networking.multicast` entitlement** to send UDP broadcast packets. This is a restricted entitlement that must be requested from Apple before it can be used in App Store submissions. macOS and macOS sandbox apps are not affected. See [Apple's documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast) for details on requesting this entitlement.
+
+When the entitlement is missing, `wake(peer:)` throws `BonjourPicoError.broadcastNotPermitted`. Other socket failures throw `BonjourPicoError.sendFailed`, whose associated value describes the underlying system error.
