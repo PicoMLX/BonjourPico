@@ -125,8 +125,10 @@ open class BonjourPico {
                         self.addServer(result: result)
                     case .removed(let result):
                         self.removeServer(result: result)
-                    case .changed(old: _, new: let new, flags: _):
-                        self.removeServer(result: new)
+                    case .changed(old: let old, new: let new, flags: _):
+                        // Remove the previous instance (keyed off `old`) so a changed
+                        // ServerIdentifier can't leave a stale duplicate; addServer dedupes new.
+                        self.removeServer(result: old)
                         self.addServer(result: new)
                     case .identical:
                         break
