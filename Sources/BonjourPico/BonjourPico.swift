@@ -100,7 +100,9 @@ open class BonjourPico {
     /// after the failing syscall, before any other call can overwrite `errno`.
     private nonisolated static func socketError() -> BonjourPicoError {
         let err = errno
-        if err == EPERM {
+        // Broadcast/entitlement denials surface as EPERM or EACCES (sendto to a
+        // broadcast address commonly returns EACCES). Map both to the documented case.
+        if err == EPERM || err == EACCES {
             return .broadcastNotPermitted
         }
         return .sendFailed(String(cString: strerror(err)))
