@@ -151,6 +151,19 @@ import Foundation
         #expect(pico.servers.first?.name == "New Name")
     }
 
+    @Test @MainActor func upsertReplacesInPlacePreservingOrder() {
+        let pico = BonjourPico()
+        pico.upsert(makeModel(id: "a"))
+        pico.upsert(makeModel(id: "b", name: "Old Name"))
+        pico.upsert(makeModel(id: "c"))
+
+        // Updating "b" must keep its position rather than moving it to the end.
+        pico.upsert(makeModel(id: "b", name: "New Name"))
+
+        #expect(pico.servers.map(\.id) == ["a", "b", "c"])
+        #expect(pico.servers[1].name == "New Name")
+    }
+
     @Test @MainActor func removeByIdentifier() {
         let pico = BonjourPico()
         pico.upsert(makeModel(id: "a"))

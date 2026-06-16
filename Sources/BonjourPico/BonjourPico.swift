@@ -179,11 +179,15 @@ open class BonjourPico {
     // The following list-mutation helpers are internal (not private) so the dedup
     // behavior can be unit-tested without constructing an NWBrowser.Result.
 
-    /// Inserts `server`, replacing any existing entry with the same stable `id`
-    /// so the list never holds duplicates of the same instance.
+    /// Inserts `server`, or replaces an existing entry with the same stable `id`
+    /// in place. Replacing in place (rather than remove + append) preserves the
+    /// list order so an updated server doesn't jump position in the UI.
     func upsert(_ server: PicoHomelabModel) {
-        servers.removeAll { $0.id == server.id }
-        servers.append(server)
+        if let index = servers.firstIndex(where: { $0.id == server.id }) {
+            servers[index] = server
+        } else {
+            servers.append(server)
+        }
     }
 
     /// Removes any server matching the stable `ServerIdentifier`.
