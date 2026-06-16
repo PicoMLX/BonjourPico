@@ -1,7 +1,8 @@
-import XCTest
+import Testing
+import Foundation
 @testable import BonjourPico
 
-final class BonjourPicoTests: XCTestCase {
+@Suite struct BonjourPicoTests {
 
     // MARK: - Helpers
 
@@ -23,92 +24,96 @@ final class BonjourPicoTests: XCTestCase {
 
     // MARK: - Wake-on-LAN magic packet
 
-    func testMagicPacketForValidMAC() throws {
+    @Test func magicPacketForValidMAC() throws {
         let packet = try BonjourPico.magicPacket(for: "AA:BB:CC:DD:EE:FF")
 
         // 6 synchronization bytes (0xFF) followed by 16 repetitions of the MAC.
-        XCTAssertEqual(packet.count, 6 + 16 * 6)
+        #expect(packet.count == 6 + 16 * 6)
 
         let bytes = [UInt8](packet)
-        XCTAssertEqual(Array(bytes.prefix(6)), [UInt8](repeating: 0xFF, count: 6))
+        #expect(Array(bytes.prefix(6)) == [UInt8](repeating: 0xFF, count: 6))
 
         let mac: [UInt8] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]
         for repetition in 0..<16 {
             let start = 6 + repetition * 6
-            XCTAssertEqual(Array(bytes[start..<start + 6]), mac)
+            #expect(Array(bytes[start..<start + 6]) == mac)
         }
     }
 
-    func testMagicPacketAcceptsHyphenSeparator() throws {
+    @Test func magicPacketAcceptsHyphenSeparator() throws {
         let colon = try BonjourPico.magicPacket(for: "AA:BB:CC:DD:EE:FF")
         let hyphen = try BonjourPico.magicPacket(for: "AA-BB-CC-DD-EE-FF")
-        XCTAssertEqual(colon, hyphen)
+        #expect(colon == hyphen)
     }
 
-    func testMagicPacketIsCaseInsensitive() throws {
+    @Test func magicPacketIsCaseInsensitive() throws {
         let upper = try BonjourPico.magicPacket(for: "AA:BB:CC:DD:EE:FF")
         let lower = try BonjourPico.magicPacket(for: "aa:bb:cc:dd:ee:ff")
         let mixed = try BonjourPico.magicPacket(for: "Aa:bB:Cc:dD:Ee:fF")
-        XCTAssertEqual(upper, lower)
-        XCTAssertEqual(upper, mixed)
+        #expect(lower == upper)
+        #expect(mixed == upper)
     }
 
-    func testMagicPacketRejectsWrongComponentCount() {
-        for mac in ["AA:BB:CC:DD:EE", "AA:BB:CC:DD:EE:FF:11", ""] {
-            XCTAssertThrowsError(try BonjourPico.magicPacket(for: mac)) { error in
-                XCTAssertEqual(error as? BonjourPicoError, .invalidMACAddress, "mac: \(mac)")
-            }
+    @Test("Rejects MACs with the wrong number of components", arguments: [
+        "AA:BB:CC:DD:EE",        // too few
+        "AA:BB:CC:DD:EE:FF:11",  // too many
+        ""                       // empty
+    ])
+    func magicPacketRejectsWrongComponentCount(mac: String) {
+        #expect(throws: BonjourPicoError.invalidMACAddress) {
+            try BonjourPico.magicPacket(for: mac)
         }
     }
 
-    func testMagicPacketRejectsWrongComponentLength() {
-        // Components must be exactly two hex digits.
-        for mac in ["A:BB:CC:DD:EE:FF", "AAA:BB:CC:DD:EE:FF"] {
-            XCTAssertThrowsError(try BonjourPico.magicPacket(for: mac)) { error in
-                XCTAssertEqual(error as? BonjourPicoError, .invalidMACAddress, "mac: \(mac)")
-            }
+    @Test("Rejects components that are not exactly two hex digits", arguments: [
+        "A:BB:CC:DD:EE:FF",
+        "AAA:BB:CC:DD:EE:FF"
+    ])
+    func magicPacketRejectsWrongComponentLength(mac: String) {
+        #expect(throws: BonjourPicoError.invalidMACAddress) {
+            try BonjourPico.magicPacket(for: mac)
         }
     }
 
-    func testMagicPacketRejectsNonHexComponents() {
-        // The leading-sign hole: UInt8("+F", radix: 16) parses successfully, so this
-        // must be rejected explicitly by the isHexDigit check.
-        for mac in ["AA:BB:CC:DD:EE:+F", "AA:BB:CC:DD:EE:-F", "GG:BB:CC:DD:EE:FF", "ZZ:ZZ:ZZ:ZZ:ZZ:ZZ"] {
-            XCTAssertThrowsError(try BonjourPico.magicPacket(for: mac)) { error in
-                XCTAssertEqual(error as? BonjourPicoError, .invalidMACAddress, "mac: \(mac)")
-            }
+    @Test("Rejects non-hex components, including the +/- leading-sign hole", arguments: [
+        "AA:BB:CC:DD:EE:+F",
+        "AA:BB:CC:DD:EE:-F",
+        "GG:BB:CC:DD:EE:FF",
+        "ZZ:ZZ:ZZ:ZZ:ZZ:ZZ"
+    ])
+    func magicPacketRejectsNonHexComponents(mac: String) {
+        #expect(throws: BonjourPicoError.invalidMACAddress) {
+            try BonjourPico.magicPacket(for: mac)
         }
     }
 
     // MARK: - Error type
 
-    func testErrorEquatable() {
-        XCTAssertEqual(BonjourPicoError.broadcastNotPermitted, .broadcastNotPermitted)
-        XCTAssertEqual(BonjourPicoError.sendFailed("boom"), .sendFailed("boom"))
-        XCTAssertNotEqual(BonjourPicoError.sendFailed("a"), .sendFailed("b"))
-        XCTAssertNotEqual(BonjourPicoError.invalidMACAddress, .noMACAddress)
+    @Test func errorEquatable() {
+        #expect(BonjourPicoError.broadcastNotPermitted == .broadcastNotPermitted)
+        #expect(BonjourPicoError.sendFailed("boom") == .sendFailed("boom"))
+        #expect(BonjourPicoError.sendFailed("a") != .sendFailed("b"))
+        #expect(BonjourPicoError.invalidMACAddress != .noMACAddress)
     }
 
-    func testAllErrorsHaveLocalizedDescriptions() {
-        let errors: [BonjourPicoError] = [
-            .internalError, .invalidEndpoint, .couldNotConnect, .connectionCancelled,
-            .noTxtRecord, .noMACAddress, .invalidMACAddress, .broadcastNotPermitted,
-            .sendFailed("underlying error")
-        ]
-        for error in errors {
-            XCTAssertNotNil(error.errorDescription, "\(error) should have a description")
-            XCTAssertFalse(error.errorDescription?.isEmpty ?? true, "\(error) description empty")
-        }
+    @Test(arguments: [
+        BonjourPicoError.internalError, .invalidEndpoint, .couldNotConnect, .connectionCancelled,
+        .noTxtRecord, .noMACAddress, .invalidMACAddress, .broadcastNotPermitted,
+        .sendFailed("underlying error")
+    ])
+    func errorHasLocalizedDescription(error: BonjourPicoError) throws {
+        let description = try #require(error.errorDescription)
+        #expect(!description.isEmpty)
     }
 
-    func testSendFailedDescriptionIncludesUnderlyingMessage() {
+    @Test func sendFailedDescriptionIncludesUnderlyingMessage() {
         let description = BonjourPicoError.sendFailed("connection refused").errorDescription
-        XCTAssertEqual(description?.contains("connection refused"), true)
+        #expect(description?.contains("connection refused") == true)
     }
 
     // MARK: - Model
 
-    func testModelMemberwiseInit() {
+    @Test func modelMemberwiseInit() {
         // Pass a distinct value for every parameter to verify each maps to the
         // correct property, including serverId -> id and domain -> hostName.
         let model = PicoHomelabModel(
@@ -120,57 +125,52 @@ final class BonjourPicoTests: XCTestCase {
             port: 11434,
             macAddress: "AA:BB:CC:DD:EE:FF"
         )
-        XCTAssertEqual(model.id, "id-1")
-        XCTAssertEqual(model.name, "Ronald's Homelab")
-        XCTAssertEqual(model.type, "_pico._tcp")
-        XCTAssertEqual(model.hostName, "host.local")
-        XCTAssertEqual(model.ipAddress, "192.168.1.2")
-        XCTAssertEqual(model.port, 11434)
-        XCTAssertEqual(model.macAddress, "AA:BB:CC:DD:EE:FF")
+        #expect(model.id == "id-1")
+        #expect(model.name == "Ronald's Homelab")
+        #expect(model.type == "_pico._tcp")
+        #expect(model.hostName == "host.local")
+        #expect(model.ipAddress == "192.168.1.2")
+        #expect(model.port == 11434)
+        #expect(model.macAddress == "AA:BB:CC:DD:EE:FF")
     }
 
     // MARK: - Server list dedup
 
-    @MainActor
-    func testUpsertAppendsDistinctServers() {
+    @Test @MainActor func upsertAppendsDistinctServers() {
         let pico = BonjourPico()
         pico.upsert(makeModel(id: "a"))
         pico.upsert(makeModel(id: "b"))
-        XCTAssertEqual(pico.servers.map(\.id), ["a", "b"])
+        #expect(pico.servers.map(\.id) == ["a", "b"])
     }
 
-    @MainActor
-    func testUpsertReplacesSameIdentifier() {
+    @Test @MainActor func upsertReplacesSameIdentifier() {
         let pico = BonjourPico()
         pico.upsert(makeModel(id: "a", name: "Old Name"))
         pico.upsert(makeModel(id: "a", name: "New Name"))
-        XCTAssertEqual(pico.servers.count, 1)
-        XCTAssertEqual(pico.servers.first?.name, "New Name")
+        #expect(pico.servers.count == 1)
+        #expect(pico.servers.first?.name == "New Name")
     }
 
-    @MainActor
-    func testRemoveByIdentifier() {
+    @Test @MainActor func removeByIdentifier() {
         let pico = BonjourPico()
         pico.upsert(makeModel(id: "a"))
         pico.upsert(makeModel(id: "b"))
         pico.removeServer(id: "a")
-        XCTAssertEqual(pico.servers.map(\.id), ["b"])
+        #expect(pico.servers.map(\.id) == ["b"])
     }
 
-    @MainActor
-    func testRemoveByNameAndType() {
+    @Test @MainActor func removeByNameAndType() {
         let pico = BonjourPico()
         pico.upsert(makeModel(id: "a", name: "Homelab", type: "_pico._tcp"))
         pico.upsert(makeModel(id: "b", name: "Other", type: "_pico._tcp"))
         pico.removeServer(name: "Homelab", type: "_pico._tcp")
-        XCTAssertEqual(pico.servers.map(\.id), ["b"])
+        #expect(pico.servers.map(\.id) == ["b"])
     }
 
-    /// Reproduces the bug fixed in the original review: when a service's advertised
-    /// ServerIdentifier changes, a `.changed` event removes the old entry and adds the
-    /// new one. Removing by `old` (not `new`) must leave no stale duplicate.
-    @MainActor
-    func testChangedIdentifierLeavesNoStaleDuplicate() {
+    /// Regression test for the bug fixed in #2: when a service's advertised
+    /// ServerIdentifier changes, the `.changed` handler removes the old entry and adds
+    /// the new one. Removing by `old` (not `new`) must leave no stale duplicate.
+    @Test @MainActor func changedIdentifierLeavesNoStaleDuplicate() {
         let pico = BonjourPico()
         pico.upsert(makeModel(id: "old-id", name: "Server"))
 
@@ -178,6 +178,6 @@ final class BonjourPicoTests: XCTestCase {
         pico.removeServer(id: "old-id")
         pico.upsert(makeModel(id: "new-id", name: "Server"))
 
-        XCTAssertEqual(pico.servers.map(\.id), ["new-id"])
+        #expect(pico.servers.map(\.id) == ["new-id"])
     }
 }
