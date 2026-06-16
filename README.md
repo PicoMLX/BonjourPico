@@ -84,30 +84,44 @@ Before running your app, update your Xcode project settings as follows:
 
 An example app for both iOS and macOS is included in the repository.
 
+`BonjourPico` is a `@MainActor`, `@Observable` class — bind a SwiftUI view directly to its
+`endpoints` and `isScanning`. The `NWBrowser` runs off the main thread inside an internal
+actor; the facade mirrors results onto the main actor for you.
+
 ```swift
 import SwiftUI
 import BonjourPico
 
 struct ContentView: View {
-    
-    @State var bonjourPico = BonjourPico()
-    
+
+    @State private var bonjourPico = BonjourPico()
+
     var body: some View {
         VStack {
-            List(bonjourPico.servers, id: \.self) { server in
-                let domain = "\(server.hostName):\(server.port)"
-                let ip = "\(server.ipAddress):\(server.port)"
-                Text("\(server.name): \(domain) \(ip)")
+            List(bonjourPico.endpoints) { endpoint in
+                let host = endpoint.hostName ?? endpoint.ipAddresses.first ?? "—"
+                Text("\(endpoint.displayName): \(host):\(endpoint.port)")
             }
-            
+
             Button(bonjourPico.isScanning ? "Stop scanning" : "Scan for Pico AI Homelab servers") {
-                bonjourPico.startStop()
+                Task {
+                    if bonjourPico.isScanning {
+                        await bonjourPico.stopScanning()
+                    } else {
+                        try? await bonjourPico.startScanning()
+                    }
+                }
             }
         }
         .padding()
     }
 }
 ```
+
+Discovered servers are exposed as `BonjourEndpoint` values (`id`, `displayName`, `hostName`,
+`ipAddresses`, `port`, and the raw `txtRecord`). If you prefer async sequences over the
+observable property, use `await bonjourPico.endpointStream()` for an `AsyncThrowingStream` of
+endpoint snapshots.
 
 ------------------------------------------------------------
 
@@ -116,30 +130,32 @@ struct ContentView: View {
 BonjourPico can send a Wake-on-LAN magic packet to wake a sleeping Pico AI Homelab server. This requires Pico AI Homelab to have Wake-on-LAN enabled so it advertises its `MACAddress` in the Bonjour TXT record.
 
 ```swift
-try await bonjourPico.wake(peer: server)
+try await bonjourPico.wake(endpoint)
 ```
 
 > [!IMPORTANT]
-> When a machine goes to sleep, its Bonjour advertisement stops and BonjourPico removes it from `servers`. You must **cache the `macAddress` before the peer disappears**, using the stable `id` (ServerIdentifier) as the key.
+> When a machine goes to sleep, its Bonjour advertisement stops and BonjourPico removes it from `endpoints`. You must **cache the `macAddress` before the endpoint disappears**, using the stable `id` (ServerIdentifier) as the key.
 
 ```swift
 // When a server is discovered, persist its MAC address:
-if let mac = server.macAddress {
-    UserDefaults.standard.set(mac, forKey: "mac-\(server.id)")
+if let mac = endpoint.macAddress {
+    UserDefaults.standard.set(mac, forKey: "mac-\(endpoint.id)")
 }
 
-// Later, to wake a known-but-offline server:
-if let mac = UserDefaults.standard.string(forKey: "mac-\(knownServer.id)") {
-    let peerWithMac = PicoHomelabModel(
-        serverId: knownServer.id,
-        name: knownServer.name,
-        type: knownServer.type,
-        domain: knownServer.hostName,
-        ipAddress: knownServer.ipAddress,
-        port: knownServer.port,
-        macAddress: mac
+// Later, to wake a known-but-offline server, reconstruct an endpoint with the cached MAC:
+if let mac = UserDefaults.standard.string(forKey: "mac-\(known.id)") {
+    let endpoint = BonjourEndpoint(
+        id: known.id,
+        name: known.name,
+        type: known.type,
+        domain: known.domain,
+        interfaceName: nil,
+        hostName: known.hostName,
+        ipAddresses: known.ipAddresses,
+        port: known.port,
+        txtRecord: ["MACAddress": Data(mac.utf8)]
     )
-    try await bonjourPico.wake(peer: peerWithMac)
+    try await bonjourPico.wake(endpoint)
 }
 ```
 
@@ -149,4 +165,4 @@ if let mac = UserDefaults.standard.string(forKey: "mac-\(knownServer.id)") {
 > [!WARNING]
 > **iOS apps require the `com.apple.developer.networking.multicast` entitlement** to send UDP broadcast packets. This is a restricted entitlement that must be requested from Apple before it can be used in App Store submissions. macOS and macOS sandbox apps are not affected. See [Apple's documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast) for details on requesting this entitlement.
 
-When the entitlement is missing, `wake(peer:)` throws `BonjourPicoError.broadcastNotPermitted`. Other socket failures throw `BonjourPicoError.sendFailed`, whose associated value describes the underlying system error.
+When the entitlement is missing, `wake(_:)` throws `BonjourPicoError.broadcastNotPermitted`. Other socket failures throw `BonjourPicoError.sendFailed`, whose associated value describes the underlying system error.
