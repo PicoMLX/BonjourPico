@@ -109,11 +109,24 @@ final class BonjourPicoTests: XCTestCase {
     // MARK: - Model
 
     func testModelMemberwiseInit() {
-        let model = makeModel(id: "id-1")
+        // Pass a distinct value for every parameter to verify each maps to the
+        // correct property, including serverId -> id and domain -> hostName.
+        let model = PicoHomelabModel(
+            serverId: "id-1",
+            name: "Ronald's Homelab",
+            type: "_pico._tcp",
+            domain: "host.local",
+            ipAddress: "192.168.1.2",
+            port: 11434,
+            macAddress: "AA:BB:CC:DD:EE:FF"
+        )
         XCTAssertEqual(model.id, "id-1")
-        XCTAssertEqual(model.hostName, "id-1.local")
+        XCTAssertEqual(model.name, "Ronald's Homelab")
+        XCTAssertEqual(model.type, "_pico._tcp")
+        XCTAssertEqual(model.hostName, "host.local")
+        XCTAssertEqual(model.ipAddress, "192.168.1.2")
         XCTAssertEqual(model.port, 11434)
-        XCTAssertNil(model.macAddress)
+        XCTAssertEqual(model.macAddress, "AA:BB:CC:DD:EE:FF")
     }
 
     // MARK: - Server list dedup
