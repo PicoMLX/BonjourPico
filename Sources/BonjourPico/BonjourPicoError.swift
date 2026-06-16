@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum BonjourPicoError: Error {
+public enum BonjourPicoError: Error, Equatable {
     case internalError
     case invalidEndpoint
     case couldNotConnect
@@ -15,6 +15,11 @@ enum BonjourPicoError: Error {
     case noTxtRecord
     case noMACAddress
     case invalidMACAddress
+    /// The OS refused to send the broadcast packet. On iOS this typically means the
+    /// `com.apple.developer.networking.multicast` entitlement is missing.
+    case broadcastNotPermitted
+    /// Sending the magic packet failed. The associated value is the underlying system error.
+    case sendFailed(String)
 }
 
 extension BonjourPicoError: LocalizedError {
@@ -34,6 +39,10 @@ extension BonjourPicoError: LocalizedError {
             return String(localized: "No MAC address available for Wake-on-LAN")
         case .invalidMACAddress:
             return String(localized: "Invalid MAC address format")
+        case .broadcastNotPermitted:
+            return String(localized: "Broadcasting is not permitted. iOS apps require the multicast networking entitlement to send Wake-on-LAN packets.")
+        case .sendFailed(let message):
+            return String(localized: "Failed to send Wake-on-LAN packet: \(message)")
         }
     }
 }
