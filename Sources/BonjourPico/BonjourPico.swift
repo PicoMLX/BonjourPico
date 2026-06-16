@@ -158,9 +158,7 @@ open class BonjourPico {
     private func addServer(result: NWBrowser.Result) {
         do {
             let server = try PicoHomelabModel(result: result)
-            // Replace any existing entry with the same stable identifier to avoid duplicates.
-            servers.removeAll { $0.id == server.id }
-            servers.append(server)
+            upsert(server)
             logger.debug("Discovered server \(server.name, privacy: .public)")
         } catch {
             logger.error("Failed to add server: \(error.localizedDescription, privacy: .public)")
@@ -171,10 +169,30 @@ open class BonjourPico {
         // Prefer the stable ServerIdentifier; fall back to name + type when unavailable.
         if case let .bonjour(txtRecord) = result.metadata,
            let id = txtRecord["ServerIdentifier"] {
-            servers.removeAll { $0.id == id }
+            removeServer(id: id)
             return
         }
         guard case .service(let name, let type, _, _) = result.endpoint else { return }
+        removeServer(name: name, type: type)
+    }
+
+    // The following list-mutation helpers are internal (not private) so the dedup
+    // behavior can be unit-tested without constructing an NWBrowser.Result.
+
+    /// Inserts `server`, replacing any existing entry with the same stable `id`
+    /// so the list never holds duplicates of the same instance.
+    func upsert(_ server: PicoHomelabModel) {
+        servers.removeAll { $0.id == server.id }
+        servers.append(server)
+    }
+
+    /// Removes any server matching the stable `ServerIdentifier`.
+    func removeServer(id: String) {
+        servers.removeAll { $0.id == id }
+    }
+
+    /// Removes any server matching the Bonjour service `name` and `type`.
+    func removeServer(name: String, type: String) {
         servers.removeAll { $0.name == name && $0.type == type }
     }
 
