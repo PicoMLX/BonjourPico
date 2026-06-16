@@ -7,7 +7,7 @@
 
 import Foundation
 
-public enum BonjourPicoError: Error, Equatable {
+public enum BonjourPicoError: Error, Equatable, Sendable {
     case internalError
     case invalidEndpoint
     case couldNotConnect
