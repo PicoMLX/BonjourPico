@@ -17,7 +17,11 @@ import os
 @Observable
 open class BonjourPico {
 
-    private var browserQ: NWBrowser? = nil
+    // Excluded from observation and marked nonisolated so `deinit` (which is
+    // nonisolated on a @MainActor class) can cancel the browser. Only ever mutated
+    // on the main actor, and deinit has exclusive access, so this is safe.
+    @ObservationIgnored
+    private nonisolated(unsafe) var browserQ: NWBrowser? = nil
 
     private let logger = Logger(subsystem: "BonjourPico", category: "discovery")
 
@@ -53,7 +57,8 @@ open class BonjourPico {
         try await Task.detached { try Self.sendMagicPacket(packet) }.value
     }
 
-    private nonisolated static func magicPacket(for macString: String) throws -> Data {
+    // Internal (not private) so tests can validate packet construction via @testable import.
+    nonisolated static func magicPacket(for macString: String) throws -> Data {
         let components = macString.replacingOccurrences(of: "-", with: ":").split(separator: ":")
         guard components.count == 6 else { throw BonjourPicoError.invalidMACAddress }
         let bytes: [UInt8] = try components.map { component in
