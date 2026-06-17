@@ -107,22 +107,22 @@ public actor BonjourDiscoveryActor {
 
     public func serviceStream() -> AsyncThrowingStream<[BonjourEndpoint], Error> {
         let id = UUID()
-        return AsyncThrowingStream { continuation in
-            self.addEndpointContinuation(continuation, id: id)
-            continuation.onTermination = { @Sendable [weak self] _ in
-                Task { await self?.removeEndpointContinuation(id: id) }
-            }
+        let (stream, continuation) = AsyncThrowingStream<[BonjourEndpoint], Error>.makeStream()
+        addEndpointContinuation(continuation, id: id)
+        continuation.onTermination = { @Sendable [weak self] _ in
+            Task { await self?.removeEndpointContinuation(id: id) }
         }
+        return stream
     }
 
     public func stateStream() -> AsyncStream<NWBrowser.State> {
         let id = UUID()
-        return AsyncStream { continuation in
-            self.addStateContinuation(continuation, id: id)
-            continuation.onTermination = { @Sendable [weak self] _ in
-                Task { await self?.removeStateContinuation(id: id) }
-            }
+        let (stream, continuation) = AsyncStream<NWBrowser.State>.makeStream()
+        addStateContinuation(continuation, id: id)
+        continuation.onTermination = { @Sendable [weak self] _ in
+            Task { await self?.removeStateContinuation(id: id) }
         }
+        return stream
     }
 
     private func startBrowser() {
@@ -173,7 +173,9 @@ public actor BonjourDiscoveryActor {
         guard browser != nil else { return }
         let delay = configuration.retryDelay
         restartTask = Task { [weak self] in
-            try? await Task.sleep(until: .now + delay, clock: .continuous)
+            // Bail out if the sleep is interrupted by cancellation (stop()/deinit),
+            // so a cancelled restart never falls through to restarting the browser.
+            guard (try? await Task.sleep(until: .now + delay, clock: .continuous)) != nil else { return }
             await self?.performRestartIfNeeded()
         }
     }
