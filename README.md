@@ -8,8 +8,70 @@ Pico AI Homelab broadcasts its hostname, IP address, and port using Bonjour by d
 
 Bonjour Pico is a Swift package—and includes an example app—that simplifies the process for chat app developers to set up automatic detection and connection to Pico AI Homelab servers.
 
+`BonjourPico` is a `@MainActor`, `@Observable` facade you bind a SwiftUI view directly to. The `NWBrowser` runs off the main thread inside an internal actor, and the facade mirrors discovery results back onto the main actor for you—so there's no threading or `NWBrowser` boilerplate to manage.
+
 > [!NOTE]  
 > Bonjour support is available in Pico AI Homelab version 1.1.1 (build 29) and newer.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Using Bonjour to Discover Pico AI Homelab Servers](#using-bonjour-to-discover-pico-ai-homelab-servers)
+- [User Walkthrough](#user-walkthrough)
+- [Bonjour Broadcast Details](#bonjour-broadcast-details)
+- [Usage](#usage)
+- [Wake-on-LAN](#wake-on-lan)
+
+------------------------------------------------------------
+
+## Requirements
+
+- **Swift 6** toolchain (Xcode 16 or newer). The package builds in the Swift 6 language mode with strict concurrency.
+- **Platforms:** macOS 14+, iOS 17+, tvOS 17+, visionOS 1+.
+- **Server side:** Pico AI Homelab 1.1.1 (build 29) or newer, with Bonjour enabled.
+
+------------------------------------------------------------
+
+## Installation
+
+### Add the package
+
+In Xcode, choose **File ▸ Add Package Dependencies…**, paste the repository URL, and add the **BonjourPico** library to your app target:
+
+```
+https://github.com/PicoMLX/BonjourPico
+```
+
+Or add it to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/PicoMLX/BonjourPico.git", branch: "main")
+],
+targets: [
+    .target(
+        name: "YourTarget",
+        dependencies: [
+            .product(name: "BonjourPico", package: "BonjourPico")
+        ]
+    )
+]
+```
+
+Then `import BonjourPico`. The module re-exports the discovery types (`BonjourEndpoint`, `BonjourDiscoveryActor`, `BonjourTXTDecoder`, `BonjourDiscoveryError`), so a single import is all you need.
+
+> [!NOTE]
+> The v2 API is actor-based and `async`. Until a versioned release is tagged, depend on the `main` branch as shown above; once a release is published you can pin it instead (for example `.package(url: …, from: "2.0.0")`).
+
+### Configure your Xcode project
+
+Before running your app, update your project settings as follows:
+
+1. Add an **NSBonjourServices** array to your `Info.plist` and include `_pico._tcp` as one of the items.  
+2. Add an **NSLocalNetworkUsageDescription** string to your `Info.plist` to explain why your app needs local network access.  
+3. If your app is sandboxed, enable **Outgoing Connections (Client)** in *Signing & Capabilities ▸ App Sandbox*.  
+4. For Wake-on-LAN on **iOS**, add the restricted `com.apple.developer.networking.multicast` entitlement (see [Wake-on-LAN](#wake-on-lan)).
 
 ------------------------------------------------------------
 
@@ -17,10 +79,10 @@ Bonjour Pico is a Swift package—and includes an example app—that simplifies 
 
 Enhance your chat app’s user experience by providing an option to automatically detect Pico AI Homelab servers on the local network via Bonjour. Pico AI Homelab broadcasts the following details:
 
-• A human-readable instance name (e.g., “Ronald's AI Homelab”)  
-• The server’s local hostname (e.g., macbook-pro.local)  
-• The server’s IP address  
-• The port on which Pico AI Homelab is running (e.g., 11434)
+• A human-readable instance name (e.g., “Ronald's AI Homelab”)  
+• The server’s local hostname (e.g., macbook-pro.local)  
+• The server’s IP address  
+• The port on which Pico AI Homelab is running (e.g., 11434)
 
 ------------------------------------------------------------
 
@@ -59,34 +121,20 @@ Pico AI Homelab broadcasts a Bonjour service with the following characteristics:
   - `MACAddress` *(optional)*: The MAC address of the server's network interface, included when Wake-on-LAN is enabled in Pico AI Homelab settings.
 
 > [!NOTE]  
-> Each Pico AI Homelab instance sends a unique UUID as its server identifier, which remains consistent between sessions. Even if the admin changes the computer’s hostname or IP address, this identifier ensures that the correct instance is recognized when scanning the network again.
+> Each Pico AI Homelab instance sends a unique UUID as its server identifier, which remains consistent between sessions. Even if the admin changes the computer’s hostname or IP address, this identifier ensures that the correct instance is recognized when scanning the network again. BonjourPico exposes it as `BonjourEndpoint.id`.
+
+> [!NOTE]
+> BonjourPico ignores incomplete advertisements: a service is only surfaced if it has a `ServerIdentifier`, a valid non-zero `Port`, and at least one way to reach it (a hostname or an IP address).
 
 ------------------------------------------------------------
 
-## Installation
+## Usage
 
-The easiest way to use Bonjour for Pico AI Homelab in your chat app is by adding the BonjourPico Swift package. You can find it here:  
-https://github.com/PicoMLX/BonjourPico
+An example app for both iOS and macOS is included in the repository (`BonjourPicoExample`).
 
-------------------------------------------------------------
+### Quick start (SwiftUI)
 
-## Xcode Settings
-
-Before running your app, update your Xcode project settings as follows:
-
-1. Add an NSBonjourServices property to your Info.plist and include _pico._tcp as one of the items.  
-2. Add an NSLocalNetworkUsageDescription property to your Info.plist to explain why your app requires network access.  
-3. If your app is sandboxed, enable "Outgoing Connections (Client)" in Signing & Capabilities > App Sandbox.
-
-------------------------------------------------------------
-
-## Sample Client Code
-
-An example app for both iOS and macOS is included in the repository.
-
-`BonjourPico` is a `@MainActor`, `@Observable` class — bind a SwiftUI view directly to its
-`endpoints` and `isScanning`. The `NWBrowser` runs off the main thread inside an internal
-actor; the facade mirrors results onto the main actor for you.
+Bind a SwiftUI view directly to the observable `endpoints` and `isScanning` properties:
 
 ```swift
 import SwiftUI
@@ -118,10 +166,75 @@ struct ContentView: View {
 }
 ```
 
-Discovered servers are exposed as `BonjourEndpoint` values (`id`, `displayName`, `hostName`,
-`ipAddresses`, `port`, and the raw `txtRecord`). If you prefer async sequences over the
-observable property, use `await bonjourPico.endpointStream()` for an `AsyncThrowingStream` of
-endpoint snapshots.
+### The `BonjourPico` API
+
+| Declaration | Description |
+| --- | --- |
+| `private(set) var endpoints: [BonjourEndpoint]` | Discovered servers, sorted by name and de-duplicated. Observable; updates while scanning. |
+| `private(set) var isScanning: Bool` | `true` for the whole scan session — from `startScanning()` until `stopScanning()`, *including* while the browser is transiently failing and auto-retrying. Drive a Scan/Stop button off this. Observable. |
+| `private(set) var state: NWBrowser.State?` | The live underlying browser state (`.ready`, `.waiting`, `.failed`, …), or `nil` when not scanning. Observable; useful for surfacing connection status. |
+| `func startScanning() async throws` | Starts a scan. Idempotent while already scanning. Throws `BonjourPicoError` if the browser can't start. |
+| `func stopScanning() async` | Stops scanning and clears `endpoints`. |
+| `func endpointStream() async -> AsyncThrowingStream<[BonjourEndpoint], Error>` | An async-sequence alternative to the observable `endpoints` (see below). |
+| `func wake(_ endpoint: BonjourEndpoint) async throws` | Sends a Wake-on-LAN magic packet to an endpoint (see [Wake-on-LAN](#wake-on-lan)). |
+| `init(configuration: BonjourDiscoveryActor.Configuration = .init())` | Creates the facade, optionally with a custom discovery configuration (see [Advanced configuration](#advanced-configuration)). |
+
+### `BonjourEndpoint`
+
+Discovered servers are immutable, `Sendable` `BonjourEndpoint` values:
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `id` | `String` | Stable identifier (`ServerIdentifier`), consistent across IP/host changes. |
+| `displayName` | `String` | Human-readable label, falling back to the host name or `id`. |
+| `name` | `String` | The advertised service / instance name. |
+| `hostName` | `String?` | The advertised local hostname (preferred for connecting). |
+| `ipAddresses` | `[String]` | The advertised IP address(es). |
+| `port` | `UInt16` | The server port (e.g. `11434`). |
+| `type` | `String` | The service type (`_pico._tcp`). |
+| `domain` | `String` | The service domain (`local.`). |
+| `interfaceName` | `String?` | The network interface the service was seen on. |
+| `txtRecord` | `[String: Data]` | The full raw TXT record, for reading any additional keys. |
+| `macAddress` | `String?` | Convenience accessor for the `MACAddress` TXT key (Wake-on-LAN). |
+
+### Consuming an async stream
+
+If you prefer async sequences over the observable property, iterate `endpointStream()`. Each element is the latest full snapshot of discovered endpoints:
+
+```swift
+// Obtain the stream before starting the scan so the subscription is in place
+// from the very first update.
+let stream = await bonjourPico.endpointStream()
+try await bonjourPico.startScanning()
+
+for try await endpoints in stream {
+    print("Discovered \(endpoints.count) server(s)")
+}
+```
+
+The stream stays open across automatic retries and finishes only when you call `stopScanning()`.
+
+### Automatic retry and the `state` property
+
+If the underlying `NWBrowser` enters a transient `.failed` state, BonjourPico automatically restarts it with a short backoff. During retry, `isScanning` stays `true` (so the user can always stop the scan) and the observable `endpoints` / `endpointStream()` subscriptions survive the restart. Observe `state` if you want to reflect the live `NWBrowser.State` in your UI.
+
+### Advanced configuration
+
+Discovery defaults to the `_pico._tcp` service in the `local.` domain. To customize the service type, domain, network parameters, or retry delay, pass a `BonjourDiscoveryActor.Configuration`:
+
+```swift
+let bonjourPico = BonjourPico(
+    configuration: .init(
+        serviceType: "_pico._tcp",
+        domain: "local.",
+        retryDelay: .seconds(2)
+    )
+)
+```
+
+### Errors
+
+Discovery and Wake-on-LAN failures are reported as `BonjourPicoError`, a `Sendable`, `Equatable`, `LocalizedError`. Notable cases include `.broadcastNotPermitted` (missing multicast entitlement), `.sendFailed` (underlying socket error, with the system message attached), and `.invalidMACAddress` / `.noMACAddress`. Each case provides a user-readable `errorDescription`.
 
 ------------------------------------------------------------
 
