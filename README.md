@@ -168,16 +168,16 @@ struct ContentView: View {
 
 ### The `BonjourPico` API
 
-| Member | Signature | Description |
-| --- | --- | --- |
-| `endpoints` | `[BonjourEndpoint]` | Discovered servers, sorted by name and de-duplicated. Observable; updates while scanning. |
-| `isScanning` | `Bool` | `true` for the whole scan session — from `startScanning()` until `stopScanning()`, *including* while the browser is transiently failing and auto-retrying. Drive a Scan/Stop button off this. Observable. |
-| `state` | `NWBrowser.State?` | The live underlying browser state (`.ready`, `.waiting`, `.failed`, …), or `nil` when not scanning. Observable; useful for surfacing connection status. |
-| `startScanning()` | `async throws` | Starts a scan. Idempotent while already scanning. Throws `BonjourPicoError` if the browser can't start. |
-| `stopScanning()` | `async` | Stops scanning and clears `endpoints`. |
-| `endpointStream()` | `async -> AsyncThrowingStream<[BonjourEndpoint], Error>` | An async-sequence alternative to the observable `endpoints` (see below). |
-| `wake(_:)` | `async throws` | Sends a Wake-on-LAN magic packet to an endpoint (see [Wake-on-LAN](#wake-on-lan)). |
-| `init(configuration:)` | — | Creates the facade, optionally with a custom discovery configuration (see [Advanced configuration](#advanced-configuration)). |
+| Declaration | Description |
+| --- | --- |
+| `private(set) var endpoints: [BonjourEndpoint]` | Discovered servers, sorted by name and de-duplicated. Observable; updates while scanning. |
+| `private(set) var isScanning: Bool` | `true` for the whole scan session — from `startScanning()` until `stopScanning()`, *including* while the browser is transiently failing and auto-retrying. Drive a Scan/Stop button off this. Observable. |
+| `private(set) var state: NWBrowser.State?` | The live underlying browser state (`.ready`, `.waiting`, `.failed`, …), or `nil` when not scanning. Observable; useful for surfacing connection status. |
+| `func startScanning() async throws` | Starts a scan. Idempotent while already scanning. Throws `BonjourPicoError` if the browser can't start. |
+| `func stopScanning() async` | Stops scanning and clears `endpoints`. |
+| `func endpointStream() async -> AsyncThrowingStream<[BonjourEndpoint], Error>` | An async-sequence alternative to the observable `endpoints` (see below). |
+| `func wake(_ endpoint: BonjourEndpoint) async throws` | Sends a Wake-on-LAN magic packet to an endpoint (see [Wake-on-LAN](#wake-on-lan)). |
+| `init(configuration: BonjourDiscoveryActor.Configuration = .init())` | Creates the facade, optionally with a custom discovery configuration (see [Advanced configuration](#advanced-configuration)). |
 
 ### `BonjourEndpoint`
 
@@ -202,9 +202,11 @@ Discovered servers are immutable, `Sendable` `BonjourEndpoint` values:
 If you prefer async sequences over the observable property, iterate `endpointStream()`. Each element is the latest full snapshot of discovered endpoints:
 
 ```swift
+// Obtain the stream before starting the scan so the subscription is in place
+// from the very first update.
+let stream = await bonjourPico.endpointStream()
 try await bonjourPico.startScanning()
 
-let stream = await bonjourPico.endpointStream()
 for try await endpoints in stream {
     print("Discovered \(endpoints.count) server(s)")
 }
