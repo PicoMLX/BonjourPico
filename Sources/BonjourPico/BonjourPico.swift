@@ -36,6 +36,9 @@ public final class BonjourPico {
     @ObservationIgnored private let discovery: BonjourDiscoveryActor
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
     @ObservationIgnored private var stateTask: Task<Void, Never>?
+    // Bumped by stopScanning() so an in-flight startScanning() that resumes afterwards
+    // doesn't flip isScanning back on for a scan that was already stopped.
+    @ObservationIgnored private var scanGeneration = 0
 
     public init(configuration: BonjourDiscoveryActor.Configuration = .init()) {
         self.discovery = BonjourDiscoveryActor(configuration: configuration)
@@ -53,18 +56,24 @@ public final class BonjourPico {
     /// Starts scanning for Pico AI Homelab servers. Idempotent while already scanning.
     public func startScanning() async throws {
         guard endpointTask == nil else { return }
+        scanGeneration += 1
+        let generation = scanGeneration
         startObserving()
         do {
             try await discovery.start()
-            isScanning = true
         } catch {
-            stopObserving()
+            // Only roll back if this start wasn't superseded by a stop/restart.
+            if generation == scanGeneration { stopObserving() }
             throw BonjourPicoError(from: error)
         }
+        // If stopScanning() ran while start() was suspended, don't report scanning.
+        guard generation == scanGeneration else { return }
+        isScanning = true
     }
 
     /// Stops scanning and clears the discovered endpoints.
     public func stopScanning() async {
+        scanGeneration += 1
         stopObserving()
         await discovery.stop()
         isScanning = false

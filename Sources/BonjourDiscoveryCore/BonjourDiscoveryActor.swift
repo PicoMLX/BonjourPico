@@ -54,6 +54,10 @@ public actor BonjourDiscoveryActor {
     // Bumped on every start/stop so callbacks queued by a previous NWBrowser can be
     // identified and ignored (a stale callback must not pollute a newer scan).
     private var browserGeneration = 0
+    // Monotonic per-results-callback sequence (assigned on the serial browser queue) so
+    // out-of-order delivery via independent Tasks can be detected and dropped.
+    private let resultsSequence = OSAllocatedUnfairLock(initialState: 0)
+    private var lastHandledResultsSequence = 0
     private var browserState: NWBrowser.State = .setup
     private var endpointsByID: [String: BonjourEndpoint] = [:]
     private var endpointContinuations: [UUID: AsyncThrowingStream<[BonjourEndpoint], Error>.Continuation] = [:]
@@ -138,22 +142,35 @@ public actor BonjourDiscoveryActor {
         diagnostics.debug("Starting browser for service: \(configuration.serviceType)")
         browserGeneration += 1
         let generation = browserGeneration
+        // Reset to a fresh starting state so a subscriber to a new scan doesn't first
+        // observe the previous scan's lingering .cancelled/.failed state.
+        browserState = .setup
+        broadcastState()
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: configuration.serviceType, domain: configuration.domain)
         let browser = NWBrowser(for: descriptor, using: configuration.parameters)
         browser.stateUpdateHandler = { [weak self] state in
             Task { await self?.handleStateUpdate(state, generation: generation) }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
-            Task { await self?.handleResults(results, generation: generation) }
+            // Assign a monotonic sequence on the serial browser queue so the actor can
+            // drop snapshots that arrive out of order through independent Tasks.
+            let sequence = self?.resultsSequence.withLock { value -> Int in
+                value += 1
+                return value
+            } ?? 0
+            Task { await self?.handleResults(results, generation: generation, sequence: sequence) }
         }
         self.browser = browser
         browser.start(queue: browserQueue)
     }
 
-    private func handleResults(_ results: Set<NWBrowser.Result>, generation: Int) {
+    private func handleResults(_ results: Set<NWBrowser.Result>, generation: Int, sequence: Int) {
         // Ignore callbacks from a previous browser (after stop() or a restart) so a stale
         // result can't resurrect endpoints or replace a fresh scan's snapshot.
         guard generation == browserGeneration else { return }
+        // Ignore snapshots delivered out of order so an older one can't overwrite newer data.
+        guard sequence > lastHandledResultsSequence else { return }
+        lastHandledResultsSequence = sequence
         var next: [String: BonjourEndpoint] = [:]
         for result in results {
             do {
