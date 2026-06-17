@@ -33,12 +33,14 @@ public actor BonjourDiscoveryActor {
 
         public func debug(_ message: @autoclosure () -> String) {
             guard let logger else { return }
-            logger.debug("\(message(), privacy: .public)")
+            let text = message()
+            logger.debug("\(text, privacy: .public)")
         }
 
         public func error(_ message: @autoclosure () -> String) {
             guard let logger else { return }
-            logger.error("\(message(), privacy: .public)")
+            let text = message()
+            logger.error("\(text, privacy: .public)")
         }
     }
 
