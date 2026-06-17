@@ -26,14 +26,27 @@ public struct BonjourEndpoint: Identifiable, Hashable, Sendable {
         let txtRecord = try decoder.decodeTXTRecord(from: result.metadata)
         let strings = try decoder.decodeStrings(from: result.metadata)
 
+        let hostName = strings[Keys.localHostName] ?? strings[Keys.hostName]
+        let ipAddresses = Self.parseAddresses(from: strings[Keys.ipAddress])
+
+        // Reject incomplete advertisements: a usable endpoint needs a valid port and at
+        // least one way to reach it (host name or IP). This matches the previous model,
+        // which discarded packets missing the connection TXT fields.
+        guard let port = Self.parsePort(from: strings[Keys.port]), port != 0 else {
+            throw BonjourDiscoveryError.missingTXTRecord
+        }
+        guard hostName != nil || !ipAddresses.isEmpty else {
+            throw BonjourDiscoveryError.missingTXTRecord
+        }
+
         self.id = strings[Keys.serverIdentifier] ?? [name, type, domain].joined(separator: "-")
         self.name = strings[Keys.displayName] ?? name
         self.type = type
         self.domain = domain
         self.interfaceName = interface?.name
-        self.hostName = strings[Keys.localHostName] ?? strings[Keys.hostName]
-        self.ipAddresses = Self.parseAddresses(from: strings[Keys.ipAddress])
-        self.port = Self.parsePort(from: strings[Keys.port])
+        self.hostName = hostName
+        self.ipAddresses = ipAddresses
+        self.port = port
         self.txtRecord = txtRecord
     }
 
@@ -95,10 +108,8 @@ public struct BonjourEndpoint: Identifiable, Hashable, Sendable {
             .filter { !$0.isEmpty }
     }
 
-    private static func parsePort(from value: String?) -> UInt16 {
-        guard let value, let parsed = UInt16(value) else {
-            return 0
-        }
-        return parsed
+    private static func parsePort(from value: String?) -> UInt16? {
+        guard let value else { return nil }
+        return UInt16(value)
     }
 }

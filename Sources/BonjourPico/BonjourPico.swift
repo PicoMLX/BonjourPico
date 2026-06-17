@@ -27,15 +27,11 @@ public final class BonjourPico {
     /// The underlying browser state, or `nil` when not scanning.
     public private(set) var state: NWBrowser.State?
 
-    /// True while the browser is actively scanning.
-    public var isScanning: Bool {
-        switch state {
-        case .ready, .waiting:
-            return true
-        default:
-            return false
-        }
-    }
+    /// True for the lifetime of a scan session — from `startScanning()` until
+    /// `stopScanning()` — including while the browser is transiently `.failed` and
+    /// automatically retrying. Drive a Scan/Stop button off this so users can always
+    /// stop an active (or retrying) scan.
+    public private(set) var isScanning = false
 
     @ObservationIgnored private let discovery: BonjourDiscoveryActor
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
@@ -60,6 +56,7 @@ public final class BonjourPico {
         startObserving()
         do {
             try await discovery.start()
+            isScanning = true
         } catch {
             stopObserving()
             throw BonjourPicoError(from: error)
@@ -70,6 +67,7 @@ public final class BonjourPico {
     public func stopScanning() async {
         stopObserving()
         await discovery.stop()
+        isScanning = false
         endpoints = []
         state = nil
     }

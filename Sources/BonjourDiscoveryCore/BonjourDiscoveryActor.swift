@@ -51,6 +51,9 @@ public actor BonjourDiscoveryActor {
     private let browserQueue: DispatchQueue
 
     private var browser: NWBrowser?
+    // Bumped on every start/stop so callbacks queued by a previous NWBrowser can be
+    // identified and ignored (a stale callback must not pollute a newer scan).
+    private var browserGeneration = 0
     private var browserState: NWBrowser.State = .setup
     private var endpointsByID: [String: BonjourEndpoint] = [:]
     private var endpointContinuations: [UUID: AsyncThrowingStream<[BonjourEndpoint], Error>.Continuation] = [:]
@@ -85,6 +88,8 @@ public actor BonjourDiscoveryActor {
     public func stop() {
         guard let browser else { return }
         diagnostics.debug("Stopping browser")
+        // Invalidate in-flight callbacks from this browser before tearing it down.
+        browserGeneration += 1
         browser.cancel()
         self.browser = nil
         restartTask?.cancel()
@@ -127,22 +132,24 @@ public actor BonjourDiscoveryActor {
 
     private func startBrowser() {
         diagnostics.debug("Starting browser for service: \(configuration.serviceType)")
+        browserGeneration += 1
+        let generation = browserGeneration
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: configuration.serviceType, domain: configuration.domain)
         let browser = NWBrowser(for: descriptor, using: configuration.parameters)
         browser.stateUpdateHandler = { [weak self] state in
-            Task { await self?.handleStateUpdate(state) }
+            Task { await self?.handleStateUpdate(state, generation: generation) }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
-            Task { await self?.handleResults(results) }
+            Task { await self?.handleResults(results, generation: generation) }
         }
         self.browser = browser
         browser.start(queue: browserQueue)
     }
 
-    private func handleResults(_ results: Set<NWBrowser.Result>) {
-        // Ignore callbacks already queued on browserQueue before stop() set browser to nil,
-        // so a late result can't resurrect endpoints after scanning has stopped.
-        guard browser != nil else { return }
+    private func handleResults(_ results: Set<NWBrowser.Result>, generation: Int) {
+        // Ignore callbacks from a previous browser (after stop() or a restart) so a stale
+        // result can't resurrect endpoints or replace a fresh scan's snapshot.
+        guard generation == browserGeneration else { return }
         var next: [String: BonjourEndpoint] = [:]
         for result in results {
             do {
@@ -156,9 +163,10 @@ public actor BonjourDiscoveryActor {
         broadcastEndpoints()
     }
 
-    private func handleStateUpdate(_ state: NWBrowser.State) {
-        // Ignore late callbacks after stop() so they can't overwrite the .cancelled state.
-        guard browser != nil else { return }
+    private func handleStateUpdate(_ state: NWBrowser.State, generation: Int) {
+        // Ignore callbacks from a previous browser so a stale state (e.g. an old
+        // .cancelled/.failed) can't overwrite the current scan's state.
+        guard generation == browserGeneration else { return }
         browserState = state
         broadcastState()
         switch state {
