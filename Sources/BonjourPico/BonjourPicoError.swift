@@ -49,6 +49,13 @@ public enum BonjourPicoError: Error, Sendable, Equatable, LocalizedError {
         self = .underlying(String(describing: error))
     }
 
+    // Localization note: the prior `Localizable.xcstrings` catalog was intentionally dropped in
+    // the v2 rearchitecture rather than carried over. It was a *dead* resource — SPM logged it as
+    // an unhandled file (never bundled), and this code calls `String(localized:)` without
+    // `bundle: .module`, so package consumers never actually received those translations.
+    // Restoring it as-is would re-introduce a dead resource whose keys no longer match these
+    // messages. First-class localization (declare the resource + `bundle: .module`) is tracked as
+    // a separate, focused change; English is the source-of-truth default in the meantime.
     public var errorDescription: String? {
         switch self {
         case .invalidEndpoint:

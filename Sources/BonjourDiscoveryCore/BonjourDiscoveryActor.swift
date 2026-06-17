@@ -58,6 +58,10 @@ public actor BonjourDiscoveryActor {
     // out-of-order delivery via independent Tasks can be detected and dropped.
     private let resultsSequence = OSAllocatedUnfairLock(initialState: 0)
     private var lastHandledResultsSequence = 0
+    // Monotonic per-state-callback sequence (assigned on the serial browser queue) so a state
+    // update delivered out of order via independent Tasks can be detected and dropped.
+    private let stateSequence = OSAllocatedUnfairLock(initialState: 0)
+    private var lastHandledStateSequence = 0
     private var browserState: NWBrowser.State = .setup
     private var endpointsByID: [String: BonjourEndpoint] = [:]
     private var endpointContinuations: [UUID: AsyncThrowingStream<[BonjourEndpoint], Error>.Continuation] = [:]
@@ -81,12 +85,17 @@ public actor BonjourDiscoveryActor {
         restartTask?.cancel()
     }
 
-    public func start() throws {
+    /// Starts the browser and returns the browser generation it created, so a caller can later
+    /// tear down *exactly* this browser via `stop(ifGeneration:)` without affecting a newer scan
+    /// that may have replaced it in the meantime.
+    @discardableResult
+    public func start() throws -> Int {
         guard browser == nil else {
             diagnostics.debug("start() ignored because the browser is already running")
             throw BonjourDiscoveryError.alreadyRunning
         }
         startBrowser()
+        return browserGeneration
     }
 
     public func stop() {
@@ -106,6 +115,15 @@ public actor BonjourDiscoveryActor {
         // so their `for await` loops end cleanly.
         finishEndpointStreams()
         finishStateStreams()
+    }
+
+    /// Stops the browser only if it is still the one identified by `generation` (i.e. it has not
+    /// already been stopped or replaced by a newer scan). The facade uses this to clean up a
+    /// browser created by a `startScanning()` that was superseded before it could observe the
+    /// result, without tearing down a newer scan's browser.
+    public func stop(ifGeneration generation: Int) {
+        guard browserGeneration == generation else { return }
+        stop()
     }
 
     public func currentEndpoints() -> [BonjourEndpoint] {
@@ -149,7 +167,13 @@ public actor BonjourDiscoveryActor {
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: configuration.serviceType, domain: configuration.domain)
         let browser = NWBrowser(for: descriptor, using: configuration.parameters)
         browser.stateUpdateHandler = { [weak self] state in
-            Task { await self?.handleStateUpdate(state, generation: generation) }
+            // Assign a monotonic sequence on the serial browser queue so the actor can drop
+            // state updates that arrive out of order through independent Tasks.
+            let sequence = self?.stateSequence.withLock { value -> Int in
+                value += 1
+                return value
+            } ?? 0
+            Task { await self?.handleStateUpdate(state, generation: generation, sequence: sequence) }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             // Assign a monotonic sequence on the serial browser queue so the actor can
@@ -184,10 +208,14 @@ public actor BonjourDiscoveryActor {
         broadcastEndpoints()
     }
 
-    private func handleStateUpdate(_ state: NWBrowser.State, generation: Int) {
+    private func handleStateUpdate(_ state: NWBrowser.State, generation: Int, sequence: Int) {
         // Ignore callbacks from a previous browser so a stale state (e.g. an old
         // .cancelled/.failed) can't overwrite the current scan's state.
         guard generation == browserGeneration else { return }
+        // Ignore state updates delivered out of order through independent Tasks so an older
+        // state (e.g. a late .ready arriving after a newer .failed) can't hide the newer one.
+        guard sequence > lastHandledStateSequence else { return }
+        lastHandledStateSequence = sequence
         browserState = state
         broadcastState()
         switch state {
@@ -244,7 +272,14 @@ public actor BonjourDiscoveryActor {
 
     private func addStateContinuation(_ continuation: AsyncStream<NWBrowser.State>.Continuation, id: UUID) {
         stateContinuations[id] = continuation
-        continuation.yield(browserState)
+        // Only replay the current state if a browser is actually running. After stop(),
+        // browserState lingers as .cancelled; replaying that to a brand-new scan's subscriber
+        // would surface the previous scan's terminal state before startBrowser() broadcasts
+        // .setup. When no browser is running yet, the imminent startBrowser() broadcast delivers
+        // the first state, so a fresh subscriber never observes a stale one.
+        if browser != nil {
+            continuation.yield(browserState)
+        }
     }
 
     private func removeStateContinuation(id: UUID) {

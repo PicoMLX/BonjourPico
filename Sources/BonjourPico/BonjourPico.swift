@@ -59,23 +59,35 @@ public final class BonjourPico {
         scanGeneration += 1
         let generation = scanGeneration
         startObserving()
+        let startedGeneration: Int
         do {
-            try await discovery.start()
+            startedGeneration = try await discovery.start()
         } catch {
             // Only roll back if this start wasn't superseded by a stop/restart.
             if generation == scanGeneration { stopObserving() }
             throw BonjourPicoError(from: error)
         }
-        // If stopScanning() ran while start() was suspended, don't report scanning.
-        guard generation == scanGeneration else { return }
+        // If stopScanning() ran while start() was suspended, the browser we just started is
+        // orphaned — the facade isn't observing it and isScanning would be wrong. Tear down
+        // exactly that browser (only if it hasn't already been replaced by a newer scan) and
+        // bail, rather than leaving a browser running with no observer.
+        guard generation == scanGeneration else {
+            await discovery.stop(ifGeneration: startedGeneration)
+            return
+        }
         isScanning = true
     }
 
     /// Stops scanning and clears the discovered endpoints.
     public func stopScanning() async {
         scanGeneration += 1
+        let generation = scanGeneration
         stopObserving()
         await discovery.stop()
+        // If a newer startScanning() superseded this stop while it was suspended at
+        // discovery.stop(), don't clobber the new scan's facade state — doing so would leave the
+        // facade reporting a stopped, empty scan while the actor has an active browser.
+        guard generation == scanGeneration else { return }
         isScanning = false
         endpoints = []
         state = nil
