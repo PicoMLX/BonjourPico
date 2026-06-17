@@ -54,6 +54,10 @@ public actor BonjourDiscoveryActor {
     // Bumped on every start/stop so callbacks queued by a previous NWBrowser can be
     // identified and ignored (a stale callback must not pollute a newer scan).
     private var browserGeneration = 0
+    // Caller-supplied token identifying the scan session that owns the current browser. Unlike
+    // browserGeneration it is NOT changed by an automatic restart, so the facade can stop exactly
+    // the session it means to — and never a newer one that raced in — via stop(ifOwner:).
+    private var browserOwner = 0
     // Monotonic per-results-callback sequence (assigned on the serial browser queue) so
     // out-of-order delivery via independent Tasks can be detected and dropped.
     private let resultsSequence = OSAllocatedUnfairLock(initialState: 0)
@@ -85,17 +89,17 @@ public actor BonjourDiscoveryActor {
         restartTask?.cancel()
     }
 
-    /// Starts the browser and returns the browser generation it created, so a caller can later
-    /// tear down *exactly* this browser via `stop(ifGeneration:)` without affecting a newer scan
-    /// that may have replaced it in the meantime.
-    @discardableResult
-    public func start() throws -> Int {
+    /// Starts the browser, tagging it with a caller-supplied `owner` token that identifies the
+    /// scan session. The token survives automatic restarts (so the session can always be stopped)
+    /// and lets the caller tear down *only* this session via `stop(ifOwner:)` without affecting a
+    /// newer scan that may have replaced it.
+    public func start(owner: Int) throws {
         guard browser == nil else {
             diagnostics.debug("start() ignored because the browser is already running")
             throw BonjourDiscoveryError.alreadyRunning
         }
+        browserOwner = owner
         startBrowser()
-        return browserGeneration
     }
 
     public func stop() {
@@ -105,6 +109,7 @@ public actor BonjourDiscoveryActor {
         browserGeneration += 1
         browser.cancel()
         self.browser = nil
+        browserOwner = 0
         restartTask?.cancel()
         restartTask = nil
         browserState = .cancelled
@@ -117,12 +122,12 @@ public actor BonjourDiscoveryActor {
         finishStateStreams()
     }
 
-    /// Stops the browser only if it is still the one identified by `generation` (i.e. it has not
-    /// already been stopped or replaced by a newer scan). The facade uses this to clean up a
-    /// browser created by a `startScanning()` that was superseded before it could observe the
-    /// result, without tearing down a newer scan's browser.
-    public func stop(ifGeneration generation: Int) {
-        guard browserGeneration == generation else { return }
+    /// Stops the browser only if the current scan session is still owned by `owner` (i.e. it has
+    /// not already been stopped or replaced by a newer scan). The facade uses this both to reap a
+    /// browser started by a superseded `startScanning()`, and to ensure a `stopScanning()` whose
+    /// `discovery.stop()` was delayed can't tear down a newer scan that started in the meantime.
+    public func stop(ifOwner owner: Int) {
+        guard browserOwner == owner else { return }
         stop()
     }
 

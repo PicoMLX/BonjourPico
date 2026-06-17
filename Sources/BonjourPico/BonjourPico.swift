@@ -39,6 +39,10 @@ public final class BonjourPico {
     // Bumped by stopScanning() so an in-flight startScanning() that resumes afterwards
     // doesn't flip isScanning back on for a scan that was already stopped.
     @ObservationIgnored private var scanGeneration = 0
+    // The scan-session token (a scanGeneration value) that currently owns the discovery actor's
+    // browser, so stopScanning() stops exactly that session via stop(ifOwner:) and never a newer
+    // one that raced in while its own discovery.stop() was suspended.
+    @ObservationIgnored private var browserOwner = 0
 
     public init(configuration: BonjourDiscoveryActor.Configuration = .init()) {
         self.discovery = BonjourDiscoveryActor(configuration: configuration)
@@ -59,9 +63,8 @@ public final class BonjourPico {
         scanGeneration += 1
         let generation = scanGeneration
         startObserving()
-        let startedGeneration: Int
         do {
-            startedGeneration = try await discovery.start()
+            try await discovery.start(owner: generation)
         } catch {
             // Only roll back if this start wasn't superseded by a stop/restart.
             if generation == scanGeneration { stopObserving() }
@@ -69,12 +72,13 @@ public final class BonjourPico {
         }
         // If stopScanning() ran while start() was suspended, the browser we just started is
         // orphaned — the facade isn't observing it and isScanning would be wrong. Tear down
-        // exactly that browser (only if it hasn't already been replaced by a newer scan) and
-        // bail, rather than leaving a browser running with no observer.
+        // exactly that session (only if a newer scan hasn't already replaced it) and bail,
+        // rather than leaving a browser running with no observer.
         guard generation == scanGeneration else {
-            await discovery.stop(ifGeneration: startedGeneration)
+            await discovery.stop(ifOwner: generation)
             return
         }
+        browserOwner = generation
         isScanning = true
     }
 
@@ -83,10 +87,13 @@ public final class BonjourPico {
         scanGeneration += 1
         let generation = scanGeneration
         stopObserving()
-        await discovery.stop()
-        // If a newer startScanning() superseded this stop while it was suspended at
-        // discovery.stop(), don't clobber the new scan's facade state — doing so would leave the
-        // facade reporting a stopped, empty scan while the actor has an active browser.
+        // Stop only the session we own. If a startScanning() races in while this call is
+        // suspended and starts a new browser, an unconditional stop() would tear that newer
+        // browser down; stop(ifOwner:) makes the delayed stop a no-op in that case.
+        await discovery.stop(ifOwner: browserOwner)
+        // If a newer startScanning() superseded this stop while it was suspended, don't clobber
+        // the new scan's facade state — doing so would leave the facade reporting a stopped,
+        // empty scan while the actor has an active browser.
         guard generation == scanGeneration else { return }
         isScanning = false
         endpoints = []
