@@ -81,18 +81,15 @@ public final class BonjourPico {
     private func startObserving() {
         let discovery = self.discovery
         endpointTask = Task { [weak self] in
-            // Re-subscribe across the actor's automatic restarts: the service stream
-            // throws when the browser fails, after which the actor restarts itself.
-            while !Task.isCancelled {
-                let stream = await discovery.serviceStream()
-                do {
-                    for try await snapshot in stream {
-                        self?.endpoints = snapshot
-                    }
-                    return // stream finished cleanly (scanning stopped)
-                } catch {
-                    try? await Task.sleep(for: .milliseconds(200))
+            // The actor keeps this stream open across automatic restarts and finishes it
+            // only on stop(), so a single loop suffices.
+            let stream = await discovery.serviceStream()
+            do {
+                for try await snapshot in stream {
+                    self?.endpoints = snapshot
                 }
+            } catch {
+                // Stream finished with an error; browser state is mirrored via stateTask.
             }
         }
         stateTask = Task { [weak self] in

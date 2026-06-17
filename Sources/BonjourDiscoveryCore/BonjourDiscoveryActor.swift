@@ -98,6 +98,10 @@ public actor BonjourDiscoveryActor {
         endpointsByID.removeAll(keepingCapacity: false)
         broadcastState()
         broadcastEndpoints()
+        // Terminate subscribers' streams now that scanning has stopped (terminal),
+        // so their `for await` loops end cleanly.
+        finishEndpointStreams()
+        finishStateStreams()
     }
 
     public func currentEndpoints() -> [BonjourEndpoint] {
@@ -171,8 +175,10 @@ public actor BonjourDiscoveryActor {
         broadcastState()
         switch state {
         case .failed(let error):
+            // Transient failure: keep subscriber streams open and auto-restart, so both
+            // the observable facade and direct endpointStream() consumers recover. The
+            // failure is surfaced via the state stream.
             diagnostics.error("Browser failed: \(error.localizedDescription)")
-            finishStreams(with: BonjourDiscoveryError.browserFailed(error))
             scheduleRestart()
         case .cancelled:
             diagnostics.debug("Browser cancelled")
@@ -235,10 +241,17 @@ public actor BonjourDiscoveryActor {
         }
     }
 
-    private func finishStreams(with error: Error) {
+    private func finishEndpointStreams() {
         for continuation in endpointContinuations.values {
-            continuation.finish(throwing: error)
+            continuation.finish()
         }
         endpointContinuations.removeAll(keepingCapacity: false)
+    }
+
+    private func finishStateStreams() {
+        for continuation in stateContinuations.values {
+            continuation.finish()
+        }
+        stateContinuations.removeAll(keepingCapacity: false)
     }
 }

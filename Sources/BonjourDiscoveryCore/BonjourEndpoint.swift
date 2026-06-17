@@ -26,20 +26,24 @@ public struct BonjourEndpoint: Identifiable, Hashable, Sendable {
         let txtRecord = try decoder.decodeTXTRecord(from: result.metadata)
         let strings = try decoder.decodeStrings(from: result.metadata)
 
-        let hostName = strings[Keys.localHostName] ?? strings[Keys.hostName]
-        let ipAddresses = Self.parseAddresses(from: strings[Keys.ipAddress])
-
-        // Reject incomplete advertisements: a usable endpoint needs a valid port and at
-        // least one way to reach it (host name or IP). This matches the previous model,
-        // which discarded packets missing the connection TXT fields.
+        // Reject incomplete advertisements, matching the previous model which discarded
+        // packets missing the fields clients rely on. A usable Pico endpoint needs:
+        //  - a stable ServerIdentifier (the documented `id` contract),
+        //  - a valid non-zero port, and
+        //  - at least one way to reach it: a non-empty host name or an IP.
+        guard let id = strings[Keys.serverIdentifier], !id.isEmpty else {
+            throw BonjourDiscoveryError.missingTXTRecord
+        }
         guard let port = Self.parsePort(from: strings[Keys.port]), port != 0 else {
             throw BonjourDiscoveryError.missingTXTRecord
         }
+        let hostName = Self.normalizedHost(strings[Keys.localHostName] ?? strings[Keys.hostName])
+        let ipAddresses = Self.parseAddresses(from: strings[Keys.ipAddress])
         guard hostName != nil || !ipAddresses.isEmpty else {
             throw BonjourDiscoveryError.missingTXTRecord
         }
 
-        self.id = strings[Keys.serverIdentifier] ?? [name, type, domain].joined(separator: "-")
+        self.id = id
         self.name = strings[Keys.displayName] ?? name
         self.type = type
         self.domain = domain
@@ -111,5 +115,15 @@ public struct BonjourEndpoint: Identifiable, Hashable, Sendable {
     private static func parsePort(from value: String?) -> UInt16? {
         guard let value else { return nil }
         return UInt16(value)
+    }
+
+    /// Trims whitespace and returns nil for an empty/whitespace-only host so a blank
+    /// LocalHostName/HostName isn't treated as a reachable address.
+    private static func normalizedHost(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
