@@ -140,6 +140,9 @@ public actor BonjourDiscoveryActor {
     }
 
     private func handleResults(_ results: Set<NWBrowser.Result>) {
+        // Ignore callbacks already queued on browserQueue before stop() set browser to nil,
+        // so a late result can't resurrect endpoints after scanning has stopped.
+        guard browser != nil else { return }
         var next: [String: BonjourEndpoint] = [:]
         for result in results {
             do {
@@ -154,6 +157,8 @@ public actor BonjourDiscoveryActor {
     }
 
     private func handleStateUpdate(_ state: NWBrowser.State) {
+        // Ignore late callbacks after stop() so they can't overwrite the .cancelled state.
+        guard browser != nil else { return }
         browserState = state
         broadcastState()
         switch state {

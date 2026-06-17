@@ -46,6 +46,8 @@ public final class BonjourPico {
     }
 
     deinit {
+        // No nonisolated(unsafe) needed: a nonisolated deinit may access Sendable stored
+        // properties, and Task is Sendable. These are only mutated on the main actor.
         endpointTask?.cancel()
         stateTask?.cancel()
     }
