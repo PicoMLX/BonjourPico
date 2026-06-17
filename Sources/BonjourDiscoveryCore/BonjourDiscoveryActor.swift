@@ -191,22 +191,29 @@ public actor BonjourDiscoveryActor {
         restartTask?.cancel()
         guard browser != nil else { return }
         let delay = configuration.retryDelay
+        let generation = browserGeneration
         restartTask = Task { [weak self] in
             // Bail out if the sleep is interrupted by cancellation (stop()/deinit),
             // so a cancelled restart never falls through to restarting the browser.
             guard (try? await Task.sleep(until: .now + delay, clock: .continuous)) != nil else { return }
-            await self?.performRestartIfNeeded()
+            await self?.performRestartIfNeeded(generation: generation)
         }
     }
 
-    private func performRestartIfNeeded() {
-        guard browser != nil else { return }
-        stop()
-        do {
-            try start()
-        } catch {
-            diagnostics.error("Automatic restart failed: \(error.localizedDescription)")
-        }
+    private func performRestartIfNeeded(generation: Int) {
+        // Ignore a stale retry whose browser was already stopped or replaced (the awakened
+        // task can outlive a cancel), so it can't tear down a newer scan.
+        guard generation == browserGeneration, browser != nil else { return }
+        diagnostics.debug("Restarting browser after failure")
+        // Restart-specific teardown: cancel the failed browser and clear its results, but
+        // do NOT finish subscriber streams (unlike stop()), so the observable facade and
+        // direct endpointStream() consumers keep their subscription across the restart.
+        browserGeneration += 1
+        browser?.cancel()
+        browser = nil
+        endpointsByID.removeAll(keepingCapacity: false)
+        broadcastEndpoints()
+        startBrowser()
     }
 
     private func addEndpointContinuation(_ continuation: AsyncThrowingStream<[BonjourEndpoint], Error>.Continuation, id: UUID) {

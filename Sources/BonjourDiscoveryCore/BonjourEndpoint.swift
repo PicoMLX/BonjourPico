@@ -37,7 +37,9 @@ public struct BonjourEndpoint: Identifiable, Hashable, Sendable {
         guard let port = Self.parsePort(from: strings[Keys.port]), port != 0 else {
             throw BonjourDiscoveryError.missingTXTRecord
         }
-        let hostName = Self.normalizedHost(strings[Keys.localHostName] ?? strings[Keys.hostName])
+        // Normalize each candidate before coalescing so a blank LocalHostName can fall
+        // back to a valid HostName rather than nilling out the host entirely.
+        let hostName = Self.normalizedHost(strings[Keys.localHostName]) ?? Self.normalizedHost(strings[Keys.hostName])
         let ipAddresses = Self.parseAddresses(from: strings[Keys.ipAddress])
         guard hostName != nil || !ipAddresses.isEmpty else {
             throw BonjourDiscoveryError.missingTXTRecord
