@@ -1,59 +1,150 @@
 import Foundation
 import Network
 import Darwin
-import os
+import BonjourDiscoveryCore
 
 /**
- Make sure to add these settings to your project. If you skip these, your app won't be able to scan for Pico AI Homelab.
- - Add a [NSBonjourServices property](https://developer.apple.com/documentation/bundleresources/information_property_list/nsbonjourservices) to your Info.plist to declare what service types you’re using (`_pico._tcp`).
- - Add a [NSLocalNetworkUsageDescription property](https://developer.apple.com/documentation/bundleresources/information_property_list/nslocalnetworkusagedescription) to your Info.plist to explain what you’re doing with the local network.
- - For sandboxed macOS app, enable`Signing & Capabilities` -> `App Sandbox` -> `Network:` `Outgoing Connections (Client)`
+ Discovers Pico AI Homelab servers on the local network via Bonjour and (optionally)
+ wakes a sleeping server with a Wake-on-LAN magic packet.
 
- This code is based on this example: https://developer.apple.com/forums/thread/735862
+ `BonjourPico` is a `@MainActor`, `@Observable` facade: bind a SwiftUI view directly to
+ `endpoints` / `isScanning`. The actual `NWBrowser` runs off the main thread inside an
+ internal `BonjourDiscoveryActor`; this facade mirrors its output onto the main actor.
 
- - Note: `BonjourPico` is main-actor isolated. Create it and call its methods from the main actor.
+ Required project configuration:
+ - Add `_pico._tcp` to the [NSBonjourServices](https://developer.apple.com/documentation/bundleresources/information_property_list/nsbonjourservices) Info.plist key.
+ - Add an [NSLocalNetworkUsageDescription](https://developer.apple.com/documentation/bundleresources/information_property_list/nslocalnetworkusagedescription) Info.plist key.
+ - For a sandboxed macOS app, enable `App Sandbox` -> `Outgoing Connections (Client)`.
+ - For Wake-on-LAN on iOS, the restricted `com.apple.developer.networking.multicast` entitlement is required.
  */
 @MainActor
 @Observable
-open class BonjourPico {
+public final class BonjourPico {
 
-    // Excluded from observation and marked nonisolated so `deinit` (which is
-    // nonisolated on a @MainActor class) can cancel the browser. Only ever mutated
-    // on the main actor, and deinit has exclusive access, so this is safe.
-    @ObservationIgnored
-    private nonisolated(unsafe) var browserQ: NWBrowser? = nil
+    /// Discovered servers, sorted and de-duplicated. Updated automatically while scanning.
+    public private(set) var endpoints: [BonjourEndpoint] = []
 
-    private let logger = Logger(subsystem: "BonjourPico", category: "discovery")
+    /// The underlying browser state, or `nil` when not scanning.
+    public private(set) var state: NWBrowser.State?
 
-    /// List of discovered Pico AI Homelab servers
-    public private(set) var servers = [PicoHomelabModel]()
+    /// True for the lifetime of a scan session — from `startScanning()` until
+    /// `stopScanning()` — including while the browser is transiently `.failed` and
+    /// automatically retrying. Drive a Scan/Stop button off this so users can always
+    /// stop an active (or retrying) scan.
+    public private(set) var isScanning = false
 
-    /// State of the browser. Is nil if browser isn't running
-    public private(set) var state: NWBrowser.State? = nil
+    @ObservationIgnored private let discovery: BonjourDiscoveryActor
+    @ObservationIgnored private var endpointTask: Task<Void, Never>?
+    @ObservationIgnored private var stateTask: Task<Void, Never>?
+    // Bumped by stopScanning() so an in-flight startScanning() that resumes afterwards
+    // doesn't flip isScanning back on for a scan that was already stopped.
+    @ObservationIgnored private var scanGeneration = 0
+    // The scan-session token (a scanGeneration value) that currently owns the discovery actor's
+    // browser, so stopScanning() stops exactly that session via stop(ifOwner:) and never a newer
+    // one that raced in while its own discovery.stop() was suspended.
+    @ObservationIgnored private var browserOwner = 0
 
-    /// True if BonjourPico is scanning for Pico AI Homelab servers
-    public var isScanning: Bool {
-        state == .ready
+    public init(configuration: BonjourDiscoveryActor.Configuration = .init()) {
+        self.discovery = BonjourDiscoveryActor(configuration: configuration)
     }
 
-    public func startStop() {
-        if let browser = self.browserQ {
-            self.browserQ = nil
-            self.stop(browser: browser)
-        } else {
-            self.browserQ = self.start()
+    deinit {
+        // No nonisolated(unsafe) needed: a nonisolated deinit may access Sendable stored
+        // properties, and Task is Sendable. These are only mutated on the main actor.
+        endpointTask?.cancel()
+        stateTask?.cancel()
+    }
+
+    // MARK: - Scanning
+
+    /// Starts scanning for Pico AI Homelab servers. Idempotent while already scanning.
+    public func startScanning() async throws {
+        guard endpointTask == nil else { return }
+        scanGeneration += 1
+        let generation = scanGeneration
+        startObserving()
+        do {
+            try await discovery.start(owner: generation)
+        } catch {
+            // Only roll back if this start wasn't superseded by a stop/restart.
+            if generation == scanGeneration { stopObserving() }
+            throw BonjourPicoError(from: error)
+        }
+        // If stopScanning() ran while start() was suspended, the browser we just started is
+        // orphaned — the facade isn't observing it and isScanning would be wrong. Tear down
+        // exactly that session (only if a newer scan hasn't already replaced it) and bail,
+        // rather than leaving a browser running with no observer.
+        guard generation == scanGeneration else {
+            await discovery.stop(ifOwner: generation)
+            return
+        }
+        browserOwner = generation
+        isScanning = true
+    }
+
+    /// Stops scanning and clears the discovered endpoints.
+    public func stopScanning() async {
+        scanGeneration += 1
+        let generation = scanGeneration
+        stopObserving()
+        // Stop only the session we own. If a startScanning() races in while this call is
+        // suspended and starts a new browser, an unconditional stop() would tear that newer
+        // browser down; stop(ifOwner:) makes the delayed stop a no-op in that case.
+        await discovery.stop(ifOwner: browserOwner)
+        // If a newer startScanning() superseded this stop while it was suspended, don't clobber
+        // the new scan's facade state — doing so would leave the facade reporting a stopped,
+        // empty scan while the actor has an active browser.
+        guard generation == scanGeneration else { return }
+        isScanning = false
+        endpoints = []
+        state = nil
+    }
+
+    /// A direct async stream of endpoint snapshots, for callers that prefer async sequences
+    /// over the observable `endpoints` property.
+    public func endpointStream() async -> AsyncThrowingStream<[BonjourEndpoint], Error> {
+        await discovery.serviceStream()
+    }
+
+    private func startObserving() {
+        let discovery = self.discovery
+        endpointTask = Task { [weak self] in
+            // The actor keeps this stream open across automatic restarts and finishes it
+            // only on stop(), so a single loop suffices.
+            let stream = await discovery.serviceStream()
+            do {
+                for try await snapshot in stream {
+                    self?.endpoints = snapshot
+                }
+            } catch {
+                // Stream finished with an error; browser state is mirrored via stateTask.
+            }
+        }
+        stateTask = Task { [weak self] in
+            let stream = await discovery.stateStream()
+            for await newState in stream {
+                self?.state = newState
+            }
         }
     }
 
-    /// Sends a Wake-on-LAN magic packet to the given peer.
-    /// The peer must have a non-nil `macAddress` (advertised via the `MACAddress` TXT record key).
-    /// Because the peer is likely offline when this is called, callers must cache the peer's
-    /// `macAddress` (keyed by `peer.id`) before the peer disappears from `servers`.
-    public func wake(peer: PicoHomelabModel) async throws {
-        guard let mac = peer.macAddress else { throw BonjourPicoError.noMACAddress }
+    private func stopObserving() {
+        endpointTask?.cancel()
+        endpointTask = nil
+        stateTask?.cancel()
+        stateTask = nil
+    }
+
+    // MARK: - Wake-on-LAN
+
+    /// Sends a Wake-on-LAN magic packet to `endpoint`, which must advertise a `MACAddress`
+    /// (the `macAddress` property). Because a sleeping server stops advertising and leaves
+    /// `endpoints`, cache its `macAddress` (keyed by the stable `id`) before it disappears
+    /// and reconstruct a `BonjourEndpoint` to wake it later.
+    public func wake(_ endpoint: BonjourEndpoint) async throws {
+        guard let mac = endpoint.macAddress else { throw BonjourPicoError.noMACAddress }
         let packet = try Self.magicPacket(for: mac)
-        // sendMagicPacket performs a blocking BSD socket send. Run it off the
-        // calling (main) actor so the async contract is honest.
+        // sendMagicPacket performs a blocking BSD socket send; run it off the main actor.
         try await Task.detached { try Self.sendMagicPacket(packet) }.value
     }
 
@@ -111,98 +202,5 @@ open class BonjourPico {
             return .broadcastNotPermitted
         }
         return .sendFailed(String(cString: strerror(err)))
-    }
-    
-    private func start() -> NWBrowser {
-        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: "_pico._tcp", domain: "local.")
-        let browser = NWBrowser(for: descriptor, using: .tcp)
-        // NWBrowser delivers callbacks on the queue passed to `start(queue:)`. We use
-        // `.main`, so it is safe to assume main-actor isolation inside these handlers.
-        browser.stateUpdateHandler = { [weak self] newState in
-            MainActor.assumeIsolated {
-                self?.state = newState
-            }
-        }
-        browser.browseResultsChangedHandler = { [weak self] _, changes in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                for change in changes {
-                    switch change {
-                    case .added(let result):
-                        self.addServer(result: result)
-                    case .removed(let result):
-                        self.removeServer(result: result)
-                    case .changed(old: let old, new: let new, flags: _):
-                        // Remove the previous instance (keyed off `old`) so a changed
-                        // ServerIdentifier can't leave a stale duplicate; addServer dedupes new.
-                        self.removeServer(result: old)
-                        self.addServer(result: new)
-                    case .identical:
-                        break
-                    @unknown default:
-                        break
-                    }
-                }
-            }
-        }
-        browser.start(queue: .main)
-        return browser
-    }
-
-    private func stop(browser: NWBrowser) {
-        self.state = nil
-        browser.stateUpdateHandler = nil
-        browser.cancel()
-    }
-
-    private func addServer(result: NWBrowser.Result) {
-        do {
-            let server = try PicoHomelabModel(result: result)
-            upsert(server)
-            logger.debug("Discovered server \(server.name, privacy: .public)")
-        } catch {
-            logger.error("Failed to add server: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func removeServer(result: NWBrowser.Result) {
-        // Prefer the stable ServerIdentifier; fall back to name + type when unavailable.
-        if case let .bonjour(txtRecord) = result.metadata,
-           let id = txtRecord["ServerIdentifier"] {
-            removeServer(id: id)
-            return
-        }
-        guard case .service(let name, let type, _, _) = result.endpoint else { return }
-        removeServer(name: name, type: type)
-    }
-
-    // The following list-mutation helpers are internal (not private) so the dedup
-    // behavior can be unit-tested without constructing an NWBrowser.Result.
-
-    /// Inserts `server`, or replaces an existing entry with the same stable `id`
-    /// in place. Replacing in place (rather than remove + append) preserves the
-    /// list order so an updated server doesn't jump position in the UI.
-    func upsert(_ server: PicoHomelabModel) {
-        if let index = servers.firstIndex(where: { $0.id == server.id }) {
-            servers[index] = server
-        } else {
-            servers.append(server)
-        }
-    }
-
-    /// Removes any server matching the stable `ServerIdentifier`.
-    func removeServer(id: String) {
-        servers.removeAll { $0.id == id }
-    }
-
-    /// Removes any server matching the Bonjour service `name` and `type`.
-    func removeServer(name: String, type: String) {
-        servers.removeAll { $0.name == name && $0.type == type }
-    }
-
-    public init() {}
-
-    deinit {
-        browserQ?.cancel()
     }
 }

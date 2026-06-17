@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 
 import PackageDescription
 
@@ -17,9 +17,12 @@ let package = Package(
             targets: ["BonjourPico"]),
     ],
     targets: [
-        .target(name: "BonjourPico"),
+        .target(name: "BonjourDiscoveryCore"),
+        .target(
+            name: "BonjourPico",
+            dependencies: ["BonjourDiscoveryCore"]),
         .testTarget(
             name: "BonjourPicoTests",
-            dependencies: ["BonjourPico"]),
+            dependencies: ["BonjourDiscoveryCore", "BonjourPico"]),
     ]
 )

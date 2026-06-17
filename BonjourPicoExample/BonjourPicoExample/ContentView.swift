@@ -9,19 +9,24 @@ import SwiftUI
 import BonjourPico
 
 struct ContentView: View {
-    
-    @State var bonjourPico = BonjourPico()
-    
+
+    @State private var bonjourPico = BonjourPico()
+
     var body: some View {
         VStack {
-            List(bonjourPico.servers, id: \.self) { server in
-                let domain = "\(server.hostName):\(server.port)"
-                let ip = "\(server.ipAddress):\(server.port)"
-                Text("\(server.name): \(domain) \(ip)")
+            List(bonjourPico.endpoints) { endpoint in
+                let host = endpoint.hostName ?? endpoint.ipAddresses.first ?? "—"
+                Text("\(endpoint.displayName): \(host):\(endpoint.port)")
             }
-            
+
             Button(bonjourPico.isScanning ? "Stop scanning" : "Scan for Pico AI Homelab servers") {
-                bonjourPico.startStop()
+                Task {
+                    if bonjourPico.isScanning {
+                        await bonjourPico.stopScanning()
+                    } else {
+                        try? await bonjourPico.startScanning()
+                    }
+                }
             }
         }
         .padding()

@@ -1,18 +1,18 @@
-//
-//  File.swift
-//  BonjourPico
-//
-//  Created by Ronald Mannak on 2/13/25.
-//
-
 import Foundation
+import BonjourDiscoveryCore
 
-public enum BonjourPicoError: Error, Equatable, Sendable {
-    case internalError
+/// Errors surfaced by the public `BonjourPico` API, covering both discovery and Wake-on-LAN.
+public enum BonjourPicoError: Error, Sendable, Equatable, LocalizedError {
+    // Discovery
     case invalidEndpoint
-    case couldNotConnect
-    case connectionCancelled
-    case noTxtRecord
+    case missingTXTRecord
+    case browserFailed(String)
+    case alreadyRunning
+    case notRunning
+    case cancelled
+    case underlying(String)
+
+    // Wake-on-LAN
     case noMACAddress
     case invalidMACAddress
     /// The OS refused to send the broadcast packet. On iOS this typically means the
@@ -20,29 +20,66 @@ public enum BonjourPicoError: Error, Equatable, Sendable {
     case broadcastNotPermitted
     /// Sending the magic packet failed. The associated value is the underlying system error.
     case sendFailed(String)
-}
 
-extension BonjourPicoError: LocalizedError {
+    /// Bridges lower-level errors (e.g. `BonjourDiscoveryError`) to the public error type.
+    public init(from error: Error) {
+        if let picoError = error as? BonjourPicoError {
+            self = picoError
+            return
+        }
+        if let discoveryError = error as? BonjourDiscoveryError {
+            switch discoveryError {
+            case .invalidEndpoint:
+                self = .invalidEndpoint
+            case .missingTXTRecord:
+                self = .missingTXTRecord
+            case .browserFailed(let nwError):
+                self = .browserFailed(nwError.localizedDescription)
+            case .alreadyRunning:
+                self = .alreadyRunning
+            case .notRunning:
+                self = .notRunning
+            }
+            return
+        }
+        if (error as NSError).code == NSUserCancelledError {
+            self = .cancelled
+            return
+        }
+        self = .underlying(String(describing: error))
+    }
+
+    // Localization note: the prior `Localizable.xcstrings` catalog was intentionally dropped in
+    // the v2 rearchitecture rather than carried over. It was a *dead* resource — SPM logged it as
+    // an unhandled file (never bundled), and this code calls `String(localized:)` without
+    // `bundle: .module`, so package consumers never actually received those translations.
+    // Restoring it as-is would re-introduce a dead resource whose keys no longer match these
+    // messages. First-class localization (declare the resource + `bundle: .module`) is tracked as
+    // a separate, focused change; English is the source-of-truth default in the meantime.
     public var errorDescription: String? {
         switch self {
-        case .internalError:
-            return String(localized: "Internal error")
         case .invalidEndpoint:
-            return String(localized: "Invalid endpoint")
-        case .couldNotConnect:
-            return String(localized: "Could not connect to Pico AI Homelab server")
-        case .connectionCancelled:
-            return String(localized: "Connection cancelled")
-        case .noTxtRecord:
-            return String(localized: "Received incomplete Bonjour packet")
+            return String(localized: "Unexpected Bonjour endpoint payload.")
+        case .missingTXTRecord:
+            return String(localized: "Received incomplete Bonjour packet.")
+        case .browserFailed(let message):
+            return String(localized: "Bonjour browser failed: \(message).")
+        case .alreadyRunning:
+            return String(localized: "Bonjour scanning is already active.")
+        case .notRunning:
+            return String(localized: "Bonjour scanning is not active.")
+        case .cancelled:
+            return String(localized: "Bonjour scanning was cancelled.")
+        case .underlying(let message):
+            return message
         case .noMACAddress:
-            return String(localized: "No MAC address available for Wake-on-LAN")
+            return String(localized: "No MAC address available for Wake-on-LAN.")
         case .invalidMACAddress:
-            return String(localized: "Invalid MAC address format")
+            return String(localized: "Invalid MAC address format.")
         case .broadcastNotPermitted:
             return String(localized: "Broadcasting is not permitted. iOS apps require the multicast networking entitlement to send Wake-on-LAN packets.")
         case .sendFailed(let message):
-            return String(localized: "Failed to send Wake-on-LAN packet: \(message)")
+            return String(localized: "Failed to send Wake-on-LAN packet: \(message).")
         }
     }
 }
