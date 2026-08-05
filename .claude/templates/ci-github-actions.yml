@@ -1,0 +1,26 @@
+# TEMPLATE — copy to .github/workflows/ci.yml only if you chose GitHub
+# Actions as (part of) your CI. Delete the variant you don't use.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]   # lets the check register on main so branch protection can require it
+
+jobs:
+  # ---- Variant A: SwiftPM / Linux-compatible (cheap, fast) ----
+  checks:
+    runs-on: ubuntu-latest
+    container: swift:6.3            # editable default; match your project toolchain
+    steps:
+      - uses: actions/checkout@v4
+      - run: chmod +x .claude/scripts/checks.sh && .claude/scripts/checks.sh
+
+  # ---- Variant B: Xcode project (macOS runner — slower, costs more) ----
+  # checks:
+  #   runs-on: macos-15
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - run: sudo xcode-select -s /Applications/Xcode_16.4.app
+  #     - run: chmod +x .claude/scripts/checks.sh && .claude/scripts/checks.sh
+  #   # configure the BUILD/TEST arrays in checks.sh with your xcodebuild
+  #   # scheme/destination so CI and local verification stay identical

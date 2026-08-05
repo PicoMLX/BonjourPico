@@ -1,0 +1,55 @@
+name: Trigger Claude build routine
+# FALLBACK — NOT ACTIVE. The native routine trigger (Issue: Labeled + Labels
+# filter) replaces this. Move this file to .github/workflows/ only if that
+# native trigger is unavailable or misbehaves.
+# When activated, this Action fires the routine's API trigger on that event.
+#
+# Setup:
+#   1. Create the routine with an API trigger at claude.ai/code/routines.
+#   2. Add repo secrets: CLAUDE_ROUTINE_FIRE_URL (the .../fire URL) and
+#      CLAUDE_ROUTINE_TOKEN (the bearer token — shown once at creation).
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: claude-build-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fire:
+    if: github.event.label.name == 'claude-build'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      # Only the issue NUMBER and URL are sent — never the title or body,
+      # so labeled-issue content can't inject into the trigger payload.
+      # The routine reads the full issue itself with `gh issue view`.
+      - name: Fire routine
+        id: fire
+        env:
+          ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_FIRE_URL }}
+          ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+        run: |
+          jq -n \
+            --arg text "Implement GitHub issue #${{ github.event.issue.number }} in ${{ github.repository }} (${{ github.event.issue.html_url }})" \
+            '{text: $text}' \
+          | curl -sS --fail-with-body -X POST "$ROUTINE_URL" \
+              -H "Authorization: Bearer $ROUTINE_TOKEN" \
+              -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "Content-Type: application/json" \
+              -d @-
+
+      - name: Block issue on dispatch failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue edit "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --remove-label claude-build --add-label claude-blocked
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "Claude routine could not be started. The issue remains blocked until this workflow is fixed; then replace 'claude-blocked' with 'claude-build' to retry."
